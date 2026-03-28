@@ -100,8 +100,13 @@ export function detectLaps(
   // Widen the SF line by 3 meters on each side for GPS tolerance
   const sf = widenStartFinishLine(startFinish, 3)
 
-  // Find all crossing indices
-  const crossings: number[] = []
+  // Find all crossings with interpolated times
+  interface Crossing {
+    index: number
+    t: number  // interpolation parameter 0-1 between points[index] and points[index+1]
+    exactTime: number  // interpolated time in ms
+  }
+  const crossings: Crossing[] = []
   const MIN_CROSSING_INTERVAL_MS = 10000 // at least 10s between crossings to avoid double-count
 
   for (let i = 0; i < points.length - 1; i++) {
@@ -113,13 +118,17 @@ export function detectLaps(
     )
 
     if (t !== null) {
+      // Interpolate exact crossing time
+      const exactTime = points[i].time + t * (points[i + 1].time - points[i].time)
+
       // Check minimum interval from last crossing
       if (crossings.length > 0) {
-        const lastIdx = crossings[crossings.length - 1]
-        const timeDiff = points[i].time - points[lastIdx].time
+        const lastCrossing = crossings[crossings.length - 1]
+        const timeDiff = exactTime - lastCrossing.exactTime
         if (timeDiff < MIN_CROSSING_INTERVAL_MS) continue
       }
-      crossings.push(i)
+      console.log(`[LAP-DETECT] Crossing at index ${i}, t=${t.toFixed(6)}, time_A=${points[i].time}, time_B=${points[i+1].time}, exactTime=${exactTime.toFixed(3)}, interval=${points[i+1].time - points[i].time}ms`)
+      crossings.push({ index: i, t, exactTime })
     }
   }
 
@@ -127,15 +136,19 @@ export function detectLaps(
   const laps: Lap[] = []
 
   for (let i = 0; i < crossings.length - 1; i++) {
-    const startIdx = crossings[i]
-    const endIdx = crossings[i + 1]
+    const startCrossing = crossings[i]
+    const endCrossing = crossings[i + 1]
+    const startIdx = startCrossing.index
+    const endIdx = endCrossing.index
     const lapPoints = points.slice(startIdx, endIdx + 1)
 
     if (lapPoints.length < 5) continue
 
-    const startTime = lapPoints[0].time
-    const endTime = lapPoints[lapPoints.length - 1].time
+    // Use interpolated crossing times for precise duration
+    const startTime = startCrossing.exactTime
+    const endTime = endCrossing.exactTime
     const duration = (endTime - startTime) / 1000
+    console.log(`[LAP-DETECT] Lap ${laps.length + 1}: startTime=${startTime.toFixed(3)}, endTime=${endTime.toFixed(3)}, duration=${duration.toFixed(6)}s`)
     const dist = totalDistance(lapPoints)
     const speeds = lapPoints.map((p) => p.speed)
     const maxSpeed = Math.max(...speeds)

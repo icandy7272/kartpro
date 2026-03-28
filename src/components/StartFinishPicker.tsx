@@ -88,7 +88,7 @@ export default function StartFinishPicker({ points, autoDetected, onConfirm }: S
   if (points.length === 0) {
     return (
       <div className="min-h-screen flex items-center justify-center">
-        <p className="text-gray-400">No GPS data available.</p>
+        <p className="text-gray-400">没有可用的 GPS 数据。</p>
       </div>
     )
   }
@@ -96,9 +96,9 @@ export default function StartFinishPicker({ points, autoDetected, onConfirm }: S
   return (
     <div className="min-h-screen flex flex-col">
       <div className="bg-gray-900 border-b border-gray-800 px-6 py-4">
-        <h2 className="text-xl font-bold text-gray-100 mb-2">Set Start/Finish Line</h2>
+        <h2 className="text-xl font-bold text-gray-100 mb-2">设置起终点线</h2>
         <p className="text-gray-400 text-sm mb-4">
-          Define where the start/finish line is on the track to detect laps.
+          在赛道上标记起终点线的位置，用于检测圈数。
         </p>
 
         <div className="flex gap-3">
@@ -110,7 +110,7 @@ export default function StartFinishPicker({ points, autoDetected, onConfirm }: S
                 : 'bg-gray-800 text-gray-400 hover:text-gray-200'
             }`}
           >
-            Auto-Detected
+            自动检测
           </button>
           <button
             onClick={() => {
@@ -123,7 +123,7 @@ export default function StartFinishPicker({ points, autoDetected, onConfirm }: S
                 : 'bg-gray-800 text-gray-400 hover:text-gray-200'
             }`}
           >
-            Pick Manually
+            手动标记
           </button>
         </div>
       </div>
@@ -174,7 +174,7 @@ export default function StartFinishPicker({ points, autoDetected, onConfirm }: S
         {mode === 'manual' && manualPoints.length < 2 && (
           <div className="absolute top-4 left-1/2 -translate-x-1/2 z-[1000] bg-gray-900/90 border border-gray-700 rounded-lg px-4 py-2">
             <p className="text-gray-300 text-sm">
-              Click on the map to place point {manualPoints.length + 1} of 2
+              点击地图放置第 {manualPoints.length + 1} 个点（共 2 个）
             </p>
           </div>
         )}
@@ -182,10 +182,10 @@ export default function StartFinishPicker({ points, autoDetected, onConfirm }: S
 
       <div className="bg-gray-900 border-t border-gray-800 px-6 py-4 flex justify-between items-center">
         <div className="text-sm text-gray-500">
-          {mode === 'auto' && !autoDetected && 'No auto-detected line available. Try manual mode.'}
-          {mode === 'auto' && autoDetected && 'Auto-detected start/finish line shown in yellow.'}
-          {mode === 'manual' && manualPoints.length < 2 && `Place ${2 - manualPoints.length} more point(s) on the map.`}
-          {mode === 'manual' && manualPoints.length === 2 && 'Start/finish line defined. Click Confirm to proceed.'}
+          {mode === 'auto' && !autoDetected && '未能自动检测起终点线，请尝试手动标记。'}
+          {mode === 'auto' && autoDetected && '自动检测的起终点线以黄色显示。'}
+          {mode === 'manual' && manualPoints.length < 2 && `还需在地图上放置 ${2 - manualPoints.length} 个点。`}
+          {mode === 'manual' && manualPoints.length === 2 && '起终点线已定义，点击确认继续。'}
         </div>
 
         <button
@@ -195,7 +195,7 @@ export default function StartFinishPicker({ points, autoDetected, onConfirm }: S
           }
           className="px-6 py-2 bg-purple-600 hover:bg-purple-500 disabled:bg-gray-700 disabled:text-gray-500 text-white font-medium rounded-lg transition-colors"
         >
-          Confirm Start/Finish Line
+          确认起终点线
         </button>
       </div>
     </div>

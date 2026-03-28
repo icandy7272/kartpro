@@ -21,7 +21,7 @@ export default function CornerTable({ analyses, selectedLapIds, fastestLapId }: 
   if (selected.length === 0) {
     return (
       <div className="h-full flex items-center justify-center">
-        <p className="text-gray-500 text-sm">Select a lap to view corner data</p>
+        <p className="text-gray-500 text-sm">选择一圈查看弯道数据</p>
       </div>
     )
   }
@@ -30,7 +30,7 @@ export default function CornerTable({ analyses, selectedLapIds, fastestLapId }: 
   if (corners.length === 0) {
     return (
       <div className="h-full flex items-center justify-center">
-        <p className="text-gray-500 text-sm">No corners detected</p>
+        <p className="text-gray-500 text-sm">未检测到弯道</p>
       </div>
     )
   }
@@ -38,16 +38,16 @@ export default function CornerTable({ analyses, selectedLapIds, fastestLapId }: 
   return (
     <div className="p-2 overflow-x-auto">
       <h3 className="text-xs font-semibold text-gray-500 uppercase tracking-wider px-1 py-1.5 mb-1">
-        Corner Performance
+        弯道性能
       </h3>
       <table className="w-full text-xs">
         <thead>
           <tr className="text-gray-500 border-b border-gray-800">
-            <th className="text-left py-1.5 px-2 font-medium">Corner</th>
+            <th className="text-left py-1.5 px-2 font-medium">弯道</th>
             {selected.map((a) => (
               <th key={a.lap.id} colSpan={4} className="text-center py-1.5 px-1 font-medium">
                 <span className={a.lap.id === fastestLapId ? 'text-purple-400' : ''}>
-                  Lap {a.lap.id}
+                  第 {a.lap.id} 圈
                 </span>
               </th>
             ))}
@@ -57,10 +57,10 @@ export default function CornerTable({ analyses, selectedLapIds, fastestLapId }: 
             {selected.map((a) => (
               <th key={a.lap.id} className="py-1" colSpan={4}>
                 <div className="flex text-[10px]">
-                  <span className="flex-1 px-1">Entry</span>
-                  <span className="flex-1 px-1">Min</span>
-                  <span className="flex-1 px-1">Exit</span>
-                  <span className="flex-1 px-1">Delta</span>
+                  <span className="flex-1 px-1">入弯</span>
+                  <span className="flex-1 px-1">最低</span>
+                  <span className="flex-1 px-1">出弯</span>
+                  <span className="flex-1 px-1">差值</span>
                 </div>
               </th>
             ))}
@@ -94,9 +94,9 @@ export default function CornerTable({ analyses, selectedLapIds, fastestLapId }: 
                 return (
                   <td key={analysis.lap.id} colSpan={4} className="py-1.5">
                     <div className="flex text-[11px] font-mono">
-                      <span className="flex-1 px-1 text-gray-300">{c.entrySpeed.toFixed(0)}</span>
-                      <span className="flex-1 px-1 text-gray-300">{c.minSpeed.toFixed(0)}</span>
-                      <span className="flex-1 px-1 text-gray-300">{c.exitSpeed.toFixed(0)}</span>
+                      <span className="flex-1 px-1 text-gray-300">{c.entrySpeed.toFixed(1)}</span>
+                      <span className="flex-1 px-1 text-gray-300">{c.minSpeed.toFixed(1)}</span>
+                      <span className="flex-1 px-1 text-gray-300">{c.exitSpeed.toFixed(1)}</span>
                       <span className={`flex-1 px-1 ${deltaColor}`}>
                         {analysis.lap.id === fastestLapId
                           ? '--'

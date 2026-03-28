@@ -31,6 +31,7 @@ export default function Settings({ config, onSave, onClose }: SettingsProps) {
           model,
           messages: [{ role: 'user', content: 'Say "connected" in one word.' }],
           max_tokens: 10,
+          stream: true,
         }),
       })
 
@@ -39,6 +40,8 @@ export default function Settings({ config, onSave, onClose }: SettingsProps) {
         throw new Error(`HTTP ${response.status}: ${body.slice(0, 200)}`)
       }
 
+      // For streaming, just verify we got a 200 response
+      response.body?.cancel()
       setTestStatus('success')
     } catch (err) {
       setTestStatus('error')
@@ -52,10 +55,10 @@ export default function Settings({ config, onSave, onClose }: SettingsProps) {
   }, [endpoint, apiKey, model, onSave])
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60">
+    <div className="fixed inset-0 z-[10000] flex items-center justify-center bg-black/60">
       <div className="bg-gray-900 border border-gray-700 rounded-xl w-full max-w-md mx-4 shadow-2xl">
         <div className="flex items-center justify-between px-5 py-4 border-b border-gray-800">
-          <h2 className="text-lg font-bold text-gray-100">AI Settings</h2>
+          <h2 className="text-lg font-bold text-gray-100">AI 设置</h2>
           <button
             onClick={onClose}
             className="text-gray-500 hover:text-gray-300 transition-colors"
@@ -69,7 +72,7 @@ export default function Settings({ config, onSave, onClose }: SettingsProps) {
         <div className="p-5 space-y-4">
           <div>
             <label className="block text-xs font-medium text-gray-400 mb-1.5">
-              API Endpoint URL
+              API 接口地址
             </label>
             <input
               type="url"
@@ -82,7 +85,7 @@ export default function Settings({ config, onSave, onClose }: SettingsProps) {
 
           <div>
             <label className="block text-xs font-medium text-gray-400 mb-1.5">
-              API Key
+              API 密钥
             </label>
             <input
               type="password"
@@ -95,7 +98,7 @@ export default function Settings({ config, onSave, onClose }: SettingsProps) {
 
           <div>
             <label className="block text-xs font-medium text-gray-400 mb-1.5">
-              Model
+              模型
             </label>
             <input
               type="text"
@@ -113,11 +116,11 @@ export default function Settings({ config, onSave, onClose }: SettingsProps) {
               disabled={testStatus === 'testing' || !endpoint || !apiKey || !model}
               className="w-full py-2 bg-gray-800 hover:bg-gray-700 disabled:bg-gray-800 disabled:text-gray-600 text-gray-300 text-sm rounded-lg border border-gray-700 transition-colors"
             >
-              {testStatus === 'testing' ? 'Testing...' : 'Test Connection'}
+              {testStatus === 'testing' ? '测试中...' : '测试连接'}
             </button>
 
             {testStatus === 'success' && (
-              <p className="text-green-400 text-xs mt-2">Connection successful.</p>
+              <p className="text-green-400 text-xs mt-2">连接成功。</p>
             )}
             {testStatus === 'error' && (
               <p className="text-red-400 text-xs mt-2">{testError}</p>
@@ -130,14 +133,14 @@ export default function Settings({ config, onSave, onClose }: SettingsProps) {
             onClick={onClose}
             className="flex-1 py-2 bg-gray-800 hover:bg-gray-700 text-gray-300 text-sm rounded-lg transition-colors"
           >
-            Cancel
+            取消
           </button>
           <button
             onClick={handleSave}
             disabled={!endpoint || !apiKey || !model}
             className="flex-1 py-2 bg-purple-600 hover:bg-purple-500 disabled:bg-gray-700 disabled:text-gray-500 text-white text-sm rounded-lg transition-colors"
           >
-            Save
+            保存
           </button>
         </div>
       </div>

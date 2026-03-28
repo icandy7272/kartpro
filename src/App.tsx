@@ -1,9 +1,14 @@
 import { useState, useCallback, useEffect } from 'react'
-import type { TrainingSession, AIConfig, LapAnalysis, Lap, Corner, GPSPoint } from './types'
-import { parseGPSFromFile } from './lib/gps-parser'
+import type { TrainingSession, AIConfig, LapAnalysis, Lap, Corner, GPSPoint, TrackProfile } from './types'
+import { parseGPSFromFile, parseGeoJSONFile } from './lib/gps-parser'
+import { parseVBO } from './lib/vbo-parser'
+import { detectCorners } from './lib/analysis/corner-detection'
+import { analyzeTrack } from './lib/analysis/track-analysis'
+import { findMatchingProfile, saveTrackProfile, calculateCenter } from './lib/track-profiles'
+import { saveSession, getSessionSummaries, getSession, deleteSession, type SessionSummary } from './lib/storage'
 import FileUpload from './components/FileUpload'
 import Layout from './components/Layout'
-import StartFinishPicker from './components/StartFinishPicker'
+import TrackSetup from './components/TrackSetup'
 
 function smoothPoints(points: GPSPoint[], windowSize = 5): GPSPoint[] {
   if (points.length < windowSize) return points
@@ -96,134 +101,99 @@ function lineSegmentIntersects(
   return t >= 0 && t <= 1 && u >= 0 && u <= 1
 }
 
+// Use the interpolated lap detection from lap-detection.ts
+// Re-exported here for compatibility with components that expect this signature
+import { detectLaps as _detectLapsInterpolated } from './lib/analysis/lap-detection'
+
 function detectLaps(
   points: GPSPoint[],
   startFinish: { lat1: number; lng1: number; lat2: number; lng2: number }
 ): Lap[] {
-  const sfLine = {
-    p1: { lat: startFinish.lat1, lng: startFinish.lng1 },
-    p2: { lat: startFinish.lat2, lng: startFinish.lng2 },
-  }
-
-  // Find crossing points
-  const crossings: number[] = []
-  for (let i = 1; i < points.length; i++) {
-    if (
-      lineSegmentIntersects(
-        { lat: points[i - 1].lat, lng: points[i - 1].lng },
-        { lat: points[i].lat, lng: points[i].lng },
-        sfLine.p1,
-        sfLine.p2
-      )
-    ) {
-      // Debounce: must be at least 10 seconds apart
-      if (crossings.length === 0 || points[i].time - points[crossings[crossings.length - 1]].time > 10000) {
-        crossings.push(i)
-      }
-    }
-  }
-
-  const laps: Lap[] = []
-  for (let c = 0; c < crossings.length - 1; c++) {
-    const startIdx = crossings[c]
-    const endIdx = crossings[c + 1]
-    const lapPoints = points.slice(startIdx, endIdx + 1)
-
-    if (lapPoints.length < 20) continue
-
-    let distance = 0
-    let maxSpeed = 0
-    let totalSpeed = 0
-    for (let i = 1; i < lapPoints.length; i++) {
-      distance += haversineDistance(lapPoints[i - 1], lapPoints[i])
-      maxSpeed = Math.max(maxSpeed, lapPoints[i].speed)
-      totalSpeed += lapPoints[i].speed
-    }
-
-    laps.push({
-      id: laps.length + 1,
-      points: lapPoints,
-      startTime: lapPoints[0].time,
-      endTime: lapPoints[lapPoints.length - 1].time,
-      duration: (lapPoints[lapPoints.length - 1].time - lapPoints[0].time) / 1000,
-      distance,
-      maxSpeed,
-      avgSpeed: totalSpeed / (lapPoints.length - 1),
-    })
-  }
-
-  return laps
+  return _detectLapsInterpolated(points, startFinish)
 }
 
-function detectCorners(points: GPSPoint[]): Corner[] {
-  if (points.length < 20) return []
 
-  const corners: Corner[] = []
-  const windowSize = 10
-  let inCorner = false
-  let cornerStart = 0
-  let minSpeed = Infinity
-  let minSpeedIdx = 0
-
-  // Detect speed dips as corners
-  const avgSpeed = points.reduce((s, p) => s + p.speed, 0) / points.length
-  const threshold = avgSpeed * 0.7
-
-  for (let i = windowSize; i < points.length - windowSize; i++) {
-    const localAvg =
-      points.slice(i - windowSize, i + windowSize).reduce((s, p) => s + p.speed, 0) /
-      (windowSize * 2)
-
-    if (localAvg < threshold && !inCorner) {
-      inCorner = true
-      cornerStart = i
-      minSpeed = points[i].speed
-      minSpeedIdx = i
-    } else if (inCorner && localAvg < threshold) {
-      if (points[i].speed < minSpeed) {
-        minSpeed = points[i].speed
-        minSpeedIdx = i
-      }
-    } else if (inCorner && localAvg >= threshold) {
-      inCorner = false
-      const cornerEnd = i
-
-      if (cornerEnd - cornerStart > 5) {
-        const entryIdx = Math.max(0, cornerStart - 3)
-        const exitIdx = Math.min(points.length - 1, cornerEnd + 3)
-
-        corners.push({
-          id: corners.length + 1,
-          name: `T${corners.length + 1}`,
-          startIndex: cornerStart,
-          endIndex: cornerEnd,
-          entrySpeed: points[entryIdx].speed * 3.6,
-          minSpeed: minSpeed * 3.6,
-          exitSpeed: points[exitIdx].speed * 3.6,
-          duration: (points[cornerEnd].time - points[cornerStart].time) / 1000,
-        })
-      }
-
-      minSpeed = Infinity
-    }
+/**
+ * Create a perpendicular reference line at a given point on the track.
+ * Used for apex-based interpolation to get precise crossing times.
+ */
+function createApexReferenceLine(
+  refPoints: GPSPoint[],
+  apexIdx: number,
+  widthDeg: number = 0.00005 // ~5 meters
+): { lat1: number; lng1: number; lat2: number; lng2: number } {
+  const idx = Math.min(apexIdx, refPoints.length - 2)
+  const dx = refPoints[Math.min(idx + 1, refPoints.length - 1)].lat - refPoints[Math.max(idx - 1, 0)].lat
+  const dy = refPoints[Math.min(idx + 1, refPoints.length - 1)].lng - refPoints[Math.max(idx - 1, 0)].lng
+  const len = Math.sqrt(dx * dx + dy * dy)
+  if (len < 1e-12) return { lat1: refPoints[idx].lat, lng1: refPoints[idx].lng, lat2: refPoints[idx].lat, lng2: refPoints[idx].lng }
+  // Perpendicular direction
+  const perpLat = (-dy / len) * widthDeg
+  const perpLng = (dx / len) * widthDeg
+  return {
+    lat1: refPoints[idx].lat - perpLat,
+    lng1: refPoints[idx].lng - perpLng,
+    lat2: refPoints[idx].lat + perpLat,
+    lng2: refPoints[idx].lng + perpLng,
   }
-
-  return corners
 }
 
-function analyzeLap(lap: Lap, corners: Corner[]): LapAnalysis {
-  const lapCorners: Corner[] = corners.map((c) => {
-    // Remap corner indices relative to this lap's points
-    const lapPoints = lap.points
+/**
+ * Find the interpolated time when a lap's GPS track crosses a reference line.
+ * Uses segmentIntersection for sub-sample precision.
+ */
+function findCrossingTime(
+  lapPoints: GPSPoint[],
+  refLine: { lat1: number; lng1: number; lat2: number; lng2: number },
+  searchCenter: number,
+  searchRadius: number = 50
+): number | null {
+  const startSearch = Math.max(0, searchCenter - searchRadius)
+  const endSearch = Math.min(lapPoints.length - 2, searchCenter + searchRadius)
+
+  let bestT: number | null = null
+  let bestDist = Infinity
+
+  for (let i = startSearch; i <= endSearch; i++) {
+    const d1x = lapPoints[i + 1].lat - lapPoints[i].lat
+    const d1y = lapPoints[i + 1].lng - lapPoints[i].lng
+    const d2x = refLine.lat2 - refLine.lat1
+    const d2y = refLine.lng2 - refLine.lng1
+    const denom = d1x * d2y - d1y * d2x
+    if (Math.abs(denom) < 1e-15) continue
+    const qpx = refLine.lat1 - lapPoints[i].lat
+    const qpy = refLine.lng1 - lapPoints[i].lng
+    const t = (qpx * d2y - qpy * d2x) / denom
+    const u = (qpx * d1y - qpy * d1x) / denom
+    if (t >= 0 && t <= 1 && u >= 0 && u <= 1) {
+      const dist = Math.abs(i - searchCenter)
+      if (dist < bestDist) {
+        bestDist = dist
+        bestT = lapPoints[i].time + t * (lapPoints[i + 1].time - lapPoints[i].time)
+      }
+    }
+  }
+  return bestT
+}
+
+function analyzeLap(lap: Lap, corners: Corner[], refPoints: GPSPoint[]): LapAnalysis {
+  const lapPoints = lap.points
+
+  // Step 1: Create apex reference lines from the reference (fastest) lap
+  const apexRefLines = corners.map((c) => {
+    const apexIdx = Math.min(c.apexIndex ?? Math.floor((c.startIndex + c.endIndex) / 2), refPoints.length - 2)
+    return createApexReferenceLine(refPoints, apexIdx)
+  })
+
+  // Step 2: For each corner, find the matching position in this lap and get speeds
+  const lapCorners: Corner[] = corners.map((c, ci) => {
+    const refMidIdx = Math.min(Math.floor((c.startIndex + c.endIndex) / 2), refPoints.length - 1)
+    const refPoint = refPoints[refMidIdx]
+
     let bestStart = 0
     let bestDist = Infinity
-
-    // Find closest point to corner apex in this lap
-    const refIdx = Math.floor((c.startIndex + c.endIndex) / 2)
-    if (refIdx >= lapPoints.length) return c
-
     for (let i = 0; i < lapPoints.length; i++) {
-      const d = haversineDistance(lapPoints[i], lapPoints[Math.min(refIdx, lapPoints.length - 1)])
+      const d = haversineDistance(lapPoints[i], refPoint)
       if (d < bestDist) {
         bestDist = d
         bestStart = i
@@ -249,9 +219,35 @@ function analyzeLap(lap: Lap, corners: Corner[]): LapAnalysis {
       entrySpeed: lapPoints[entryIdx].speed * 3.6,
       minSpeed: minSpd * 3.6,
       exitSpeed: lapPoints[exitIdx].speed * 3.6,
-      duration: (lapPoints[end].time - lapPoints[start].time) / 1000,
+      duration: 0, // Will be calculated with interpolation below
     }
   })
+
+  // Step 3: Calculate sector durations using apex reference line crossing interpolation
+  // Find interpolated apex crossing times for each corner
+  const apexTimes: (number | null)[] = lapCorners.map((c, ci) => {
+    const searchCenter = Math.floor((c.startIndex + c.endIndex) / 2)
+    return findCrossingTime(lapPoints, apexRefLines[ci], searchCenter)
+  })
+
+  // Sector time = from this apex to next apex (or lap end for last corner, lap start for first)
+  for (let i = 0; i < lapCorners.length; i++) {
+    const currentApexTime = apexTimes[i]
+    const prevApexTime = i === 0 ? lap.startTime : apexTimes[i - 1]
+    const nextApexTime = i === lapCorners.length - 1 ? lap.endTime : apexTimes[i + 1]
+
+    if (currentApexTime !== null && prevApexTime !== null) {
+      // Duration = from previous apex (or lap start) to current apex
+      lapCorners[i].duration = (currentApexTime - prevApexTime) / 1000
+    } else {
+      // Fallback to sample-point timing
+      const sectorStart = i === 0 ? 0 : lapCorners[i - 1].endIndex
+      const sectorEnd = lapCorners[i].endIndex
+      if (sectorStart < lapPoints.length && sectorEnd < lapPoints.length) {
+        lapCorners[i].duration = (lapPoints[sectorEnd].time - lapPoints[sectorStart].time) / 1000
+      }
+    }
+  }
 
   const sectorTimes = lapCorners.map((c) => c.duration)
 
@@ -278,6 +274,44 @@ function App() {
   const [rawPoints, setRawPoints] = useState<GPSPoint[]>([])
   const [smoothedPoints, setSmoothedPoints] = useState<GPSPoint[]>([])
   const [autoDetectedSF, setAutoDetectedSF] = useState<{ lat1: number; lng1: number; lat2: number; lng2: number } | null>(null)
+  const [currentFilename, setCurrentFilename] = useState('')
+  const [toast, setToast] = useState<string | null>(null)
+  const [matchedProfile, setMatchedProfile] = useState<TrackProfile | null>(null)
+  const [historySessions, setHistorySessions] = useState<SessionSummary[]>([])
+
+  // Load history on mount
+  useEffect(() => {
+    getSessionSummaries().then(setHistorySessions).catch(() => {})
+  }, [])
+
+  const refreshHistory = useCallback(() => {
+    getSessionSummaries().then(setHistorySessions).catch(() => {})
+  }, [])
+
+  const handleLoadSession = useCallback(async (id: string) => {
+    setIsLoading(true)
+    setLoadingStage('正在加载历史数据...')
+    try {
+      const session = await getSession(id)
+      if (session) {
+        setCurrentSession(session)
+        setProcessingStage('done')
+      }
+    } catch {
+      setError('加载历史数据失败')
+    } finally {
+      setIsLoading(false)
+    }
+  }, [])
+
+  const handleDeleteSession = useCallback(async (id: string) => {
+    try {
+      await deleteSession(id)
+      refreshHistory()
+    } catch {
+      setError('删除历史数据失败')
+    }
+  }, [refreshHistory])
 
   useEffect(() => {
     if (aiConfig) {
@@ -287,77 +321,232 @@ function App() {
     }
   }, [aiConfig])
 
+  // Auto-dismiss toast after 5 seconds
+  useEffect(() => {
+    if (toast) {
+      const timer = setTimeout(() => setToast(null), 5000)
+      return () => clearTimeout(timer)
+    }
+  }, [toast])
+
   const handleFileSelect = useCallback(async (file: File) => {
     setError(null)
     setIsLoading(true)
     setCurrentSession(null)
 
     try {
-      setLoadingStage('Extracting GPS data from video...')
+      setCurrentFilename(file.name)
+      setLoadingStage('正在提取 GPS 数据...')
       setProcessingStage('parsing')
-      const points = await parseGPSFromFile(file)
+
+      // Yield to let React render the loading state
+      await new Promise(r => setTimeout(r, 0))
+
+      const nameLower = file.name.toLowerCase()
+      const isGeoJSON = nameLower.endsWith('.geojson') || nameLower.endsWith('.json')
+      const isVBO = nameLower.endsWith('.vbo')
+
+      let points: GPSPoint[]
+      let vboStartFinishLine: { lat1: number; lng1: number; lat2: number; lng2: number } | undefined
+
+      if (isVBO) {
+        const text = await file.text()
+        const vboResult = parseVBO(text)
+        points = vboResult.points
+        vboStartFinishLine = vboResult.startFinishLine
+      } else if (isGeoJSON) {
+        points = await parseGeoJSONFile(file)
+      } else {
+        points = await parseGPSFromFile(file)
+      }
       setRawPoints(points)
 
-      setLoadingStage('Smoothing GPS track...')
+      setLoadingStage('正在平滑 GPS 轨迹...')
       setProcessingStage('smoothing')
+      await new Promise(r => setTimeout(r, 0))
+
       const smooth = smoothPoints(points)
       setSmoothedPoints(smooth)
 
-      setLoadingStage('Detecting start/finish line...')
-      setProcessingStage('detecting-sf')
-      const sf = detectStartFinishLine(smooth)
-      setAutoDetectedSF(sf)
+      // Check for matching saved track profile
+      const profile = findMatchingProfile(points)
+      setMatchedProfile(profile)
 
-      // Show the start/finish picker
-      setProcessingStage('picking-sf')
-      setIsLoading(false)
+      // Try automatic track analysis first
+      setLoadingStage('正在自动分析赛道...')
+      setProcessingStage('analyzing')
+      await new Promise(r => setTimeout(r, 0))
+
+      let autoAnalysisSucceeded = false
+      try {
+        const trackResult = analyzeTrack(points)
+
+        // Use VBO start/finish line if available, then saved profile, then auto-detected
+        const sf = vboStartFinishLine ?? (profile ? profile.startFinishLine : trackResult.startFinishLine)
+        const laps = detectLaps(smooth, sf)
+
+        if (laps.length > 0) {
+          // Convert TrackAnalysisCorner[] to Corner[] using the fastest lap's points
+          const fastestLap = laps.reduce((best, lap) => (lap.duration < best.duration ? lap : best), laps[0])
+          const lapPts = fastestLap.points
+
+          const classifyCorner = (angleDeg: number): string => {
+            if (angleDeg >= 90) return '发卡弯'
+            if (angleDeg >= 60) return '低速弯'
+            if (angleDeg >= 30) return '中速弯'
+            return '高速弯'
+          }
+
+          const corners: Corner[] = trackResult.corners.map((tc, idx) => {
+            // Map track-analysis indices (relative to representative lap) to nearest lap points
+            // by using arc distance ratios
+            const ratio = tc.apexDistance / trackResult.trackLength
+            const approxApexIdx = Math.round(ratio * (lapPts.length - 1))
+            const cornerHalfLen = Math.max(5, Math.round(((tc.endIndex - tc.startIndex) / 2) * (lapPts.length / trackResult.trackLength * trackResult.sampleSpacing)))
+            const startIdx = Math.max(0, approxApexIdx - cornerHalfLen)
+            const endIdx = Math.min(lapPts.length - 1, approxApexIdx + cornerHalfLen)
+            const apexIdx = Math.min(approxApexIdx, lapPts.length - 1)
+
+            let minSpd = Infinity
+            for (let i = startIdx; i <= endIdx; i++) {
+              minSpd = Math.min(minSpd, lapPts[i].speed)
+            }
+
+            const entryIdx = Math.max(0, startIdx - 3)
+            const exitIdx = Math.min(lapPts.length - 1, endIdx + 3)
+
+            return {
+              id: idx + 1,
+              name: tc.name,
+              startIndex: startIdx,
+              endIndex: endIdx,
+              midpointIndex: apexIdx,
+              apexIndex: apexIdx,
+              apexDistance: tc.apexDistance,
+              direction: tc.direction,
+              angle: tc.angleDeg,
+              type: classifyCorner(tc.angleDeg),
+              entrySpeed: lapPts[entryIdx].speed * 3.6,
+              minSpeed: minSpd * 3.6,
+              exitSpeed: lapPts[exitIdx].speed * 3.6,
+              duration: (lapPts[Math.min(endIdx, lapPts.length - 1)].time - lapPts[startIdx].time) / 1000,
+            }
+          })
+
+          // Build session directly, skipping TrackSetup
+          const analyses: LapAnalysis[] = laps.map((lap) => analyzeLap(lap, corners, fastestLap.points))
+
+          const session: TrainingSession = {
+            id: crypto.randomUUID(),
+            filename: file.name,
+            date: new Date(laps[0].startTime),
+            laps,
+            analyses,
+            corners,
+            startFinishLine: { lat1: sf.lat1, lng1: sf.lng1, lat2: sf.lat2, lng2: sf.lng2 },
+          }
+
+          setCurrentSession(session)
+          setProcessingStage('done')
+          setIsLoading(false)
+          autoAnalysisSucceeded = true
+
+          // Save to history
+          saveSession(session).then(refreshHistory).catch(() => {})
+
+          // Save/update track profile
+          const center = calculateCenter(points)
+          const cornerPositions = corners.map((c) => ({
+            lat: lapPts[Math.min(c.apexIndex ?? Math.floor((c.startIndex + c.endIndex) / 2), lapPts.length - 1)].lat,
+            lng: lapPts[Math.min(c.apexIndex ?? Math.floor((c.startIndex + c.endIndex) / 2), lapPts.length - 1)].lng,
+            name: c.name,
+          }))
+          const now = Date.now()
+          saveTrackProfile({
+            id: profile?.id ?? crypto.randomUUID(),
+            name: profile?.name ?? file.name.replace(/\.[^.]+$/, ''),
+            centerLat: center.lat,
+            centerLng: center.lng,
+            startFinishLine: sf,
+            corners: cornerPositions,
+            createdAt: profile?.createdAt ?? now,
+            updatedAt: now,
+          })
+
+          if (profile) {
+            setToast(`已识别赛道：${profile.name}，已自动加载起终线和弯道配置`)
+          }
+        }
+      } catch {
+        // Auto analysis failed, fall through to manual setup
+      }
+
+      if (!autoAnalysisSucceeded) {
+        // Fall back to manual TrackSetup flow
+        setLoadingStage('正在检测起终点线...')
+        setProcessingStage('detecting-sf')
+        await new Promise(r => setTimeout(r, 0))
+
+        // Prefer VBO-embedded SF line, then saved profile, fall back to auto-detection
+        const sf = vboStartFinishLine ?? (profile ? profile.startFinishLine : null) ?? detectStartFinishLine(smooth)
+        setAutoDetectedSF(sf)
+
+        if (profile) {
+          setToast(`已识别赛道：${profile.name}，已自动加载起终线配置`)
+        }
+
+        setProcessingStage('picking-sf')
+        setIsLoading(false)
+      }
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to process file')
+      setError(err instanceof Error ? err.message : '文件处理失败')
       setIsLoading(false)
       setProcessingStage('idle')
     }
   }, [])
 
-  const handleStartFinishConfirm = useCallback(
-    (sf: { lat1: number; lng1: number; lat2: number; lng2: number }) => {
-      setIsLoading(true)
-
-      setLoadingStage('Detecting laps...')
-      setProcessingStage('detecting-laps')
-      const laps = detectLaps(smoothedPoints, sf)
-
-      if (laps.length === 0) {
-        setError('No laps detected. Try adjusting the start/finish line position.')
-        setIsLoading(false)
-        setProcessingStage('picking-sf')
-        return
-      }
-
-      setLoadingStage('Detecting corners...')
-      setProcessingStage('detecting-corners')
-      // Use the fastest lap to detect corners
-      const fastestLap = laps.reduce((best, lap) => (lap.duration < best.duration ? lap : best), laps[0])
-      const corners = detectCorners(fastestLap.points)
-
-      setLoadingStage('Analyzing laps...')
-      setProcessingStage('analyzing')
-      const analyses: LapAnalysis[] = laps.map((lap) => analyzeLap(lap, corners))
+  const handleTrackSetupComplete = useCallback(
+    (data: { startFinishLine: { lat1: number; lng1: number; lat2: number; lng2: number }; laps: Lap[]; corners: Corner[]; trackName?: string }) => {
+      const fastestLap = data.laps.reduce((best, lap) => (lap.duration < best.duration ? lap : best), data.laps[0])
+      const analyses: LapAnalysis[] = data.laps.map((lap) => analyzeLap(lap, data.corners, fastestLap.points))
 
       const session: TrainingSession = {
         id: crypto.randomUUID(),
-        filename: 'session',
-        date: new Date(laps[0].startTime),
-        laps,
+        filename: currentFilename,
+        date: new Date(data.laps[0].startTime),
+        laps: data.laps,
         analyses,
-        startFinishLine: sf,
+        corners: data.corners,
+        startFinishLine: data.startFinishLine,
       }
 
       setCurrentSession(session)
-      setIsLoading(false)
-      setLoadingStage('')
       setProcessingStage('done')
+
+      // Save to history
+      saveSession(session).then(refreshHistory).catch(() => {})
+
+      // Save track profile from manual setup
+      const lapPts = fastestLap.points
+      const center = calculateCenter(smoothedPoints.length > 0 ? smoothedPoints : lapPts)
+      const cornerPositions = data.corners.map((c) => ({
+        lat: lapPts[Math.min(c.apexIndex ?? Math.floor((c.startIndex + c.endIndex) / 2), lapPts.length - 1)].lat,
+        lng: lapPts[Math.min(c.apexIndex ?? Math.floor((c.startIndex + c.endIndex) / 2), lapPts.length - 1)].lng,
+        name: c.name,
+      }))
+      const now = Date.now()
+      saveTrackProfile({
+        id: matchedProfile?.id ?? crypto.randomUUID(),
+        name: data.trackName ?? matchedProfile?.name ?? currentFilename.replace(/\.[^.]+$/, ''),
+        centerLat: center.lat,
+        centerLng: center.lng,
+        startFinishLine: data.startFinishLine,
+        corners: cornerPositions,
+        createdAt: matchedProfile?.createdAt ?? now,
+        updatedAt: now,
+      })
     },
-    [smoothedPoints]
+    [currentFilename, smoothedPoints, matchedProfile]
   )
 
   const handleNewSession = useCallback(() => {
@@ -369,14 +558,16 @@ function App() {
     setRawPoints([])
     setSmoothedPoints([])
     setAutoDetectedSF(null)
+    setToast(null)
+    setMatchedProfile(null)
   }, [])
 
   return (
     <div className="min-h-screen bg-gray-950 text-gray-100">
       {error && (
-        <div className="fixed top-4 left-1/2 -translate-x-1/2 z-50 bg-red-900/90 border border-red-700 text-red-100 px-6 py-3 rounded-lg shadow-lg max-w-lg">
+        <div className="fixed top-4 left-1/2 -translate-x-1/2 z-[10000] bg-red-900/90 border border-red-700 text-red-100 px-6 py-3 rounded-lg shadow-lg max-w-lg">
           <div className="flex items-center gap-3">
-            <span className="text-red-400 font-bold">Error</span>
+            <span className="text-red-400 font-bold">错误</span>
             <span className="text-sm">{error}</span>
             <button
               onClick={() => setError(null)}
@@ -388,8 +579,23 @@ function App() {
         </div>
       )}
 
+      {toast && (
+        <div className="fixed top-4 left-1/2 -translate-x-1/2 z-[10000] bg-green-900/90 border border-green-700 text-green-100 px-6 py-3 rounded-lg shadow-lg max-w-lg">
+          <div className="flex items-center gap-3">
+            <span className="text-green-400 font-bold">赛道识别</span>
+            <span className="text-sm">{toast}</span>
+            <button
+              onClick={() => setToast(null)}
+              className="ml-auto text-green-300 hover:text-green-100"
+            >
+              x
+            </button>
+          </div>
+        </div>
+      )}
+
       {isLoading && (
-        <div className="fixed inset-0 z-40 bg-gray-950/80 flex items-center justify-center">
+        <div className="fixed inset-0 z-[10000] bg-gray-950/80 flex items-center justify-center">
           <div className="bg-gray-900 border border-gray-700 rounded-xl p-8 max-w-sm w-full mx-4 text-center">
             <div className="w-12 h-12 border-4 border-purple-500 border-t-transparent rounded-full animate-spin mx-auto mb-4" />
             <p className="text-gray-300 text-sm">{loadingStage}</p>
@@ -398,15 +604,24 @@ function App() {
       )}
 
       {processingStage === 'picking-sf' && !isLoading && (
-        <StartFinishPicker
+        <TrackSetup
           points={smoothedPoints}
           autoDetected={autoDetectedSF}
-          onConfirm={handleStartFinishConfirm}
+          onComplete={handleTrackSetupComplete}
+          detectLaps={detectLaps}
+          detectCorners={detectCorners}
+          matchedProfile={matchedProfile}
+          defaultTrackName={matchedProfile?.name ?? currentFilename.replace(/\.[^.]+$/, '')}
         />
       )}
 
       {processingStage === 'idle' && !currentSession && !isLoading && (
-        <FileUpload onFileSelect={handleFileSelect} />
+        <FileUpload
+          onFileSelect={handleFileSelect}
+          historySessions={historySessions}
+          onLoadSession={handleLoadSession}
+          onDeleteSession={handleDeleteSession}
+        />
       )}
 
       {currentSession && (
@@ -415,6 +630,7 @@ function App() {
           aiConfig={aiConfig}
           onAiConfigChange={setAiConfig}
           onNewSession={handleNewSession}
+          onUpdateSession={setCurrentSession}
         />
       )}
     </div>

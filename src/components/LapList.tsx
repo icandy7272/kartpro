@@ -1,11 +1,13 @@
 import { useCallback } from 'react'
 import type { Lap } from '../types'
+import { getLapColor } from '../lib/lap-colors'
 
 interface LapListProps {
   laps: Lap[]
   fastestLapId: number
   selectedLapIds: number[]
   onSelectionChange: (ids: number[]) => void
+  onCompare?: (lap1Id: number, lap2Id: number) => void
 }
 
 function formatTime(seconds: number): string {
@@ -19,7 +21,7 @@ function formatDelta(delta: number): string {
   return `${sign}${delta.toFixed(3)}`
 }
 
-export default function LapList({ laps, fastestLapId, selectedLapIds, onSelectionChange }: LapListProps) {
+export default function LapList({ laps, fastestLapId, selectedLapIds, onSelectionChange, onCompare }: LapListProps) {
   const fastestLap = laps.find((l) => l.id === fastestLapId)
   const fastestTime = fastestLap?.duration ?? 0
 
@@ -40,7 +42,7 @@ export default function LapList({ laps, fastestLapId, selectedLapIds, onSelectio
   if (laps.length === 0) {
     return (
       <div className="p-4 text-center">
-        <p className="text-gray-500 text-sm">No laps detected</p>
+        <p className="text-gray-500 text-sm">未检测到圈数</p>
       </div>
     )
   }
@@ -48,7 +50,7 @@ export default function LapList({ laps, fastestLapId, selectedLapIds, onSelectio
   return (
     <div className="p-2">
       <h3 className="text-xs font-semibold text-gray-500 uppercase tracking-wider px-2 py-1.5">
-        Laps
+        圈列表
       </h3>
       <div className="space-y-0.5">
         {laps.map((lap) => {
@@ -68,8 +70,9 @@ export default function LapList({ laps, fastestLapId, selectedLapIds, onSelectio
             >
               <div
                 className={`w-4 h-4 rounded border flex items-center justify-center shrink-0 ${
-                  isSelected ? 'bg-purple-600 border-purple-500' : 'border-gray-600'
+                  isSelected ? 'border-transparent' : 'border-gray-600'
                 }`}
+                style={isSelected ? { backgroundColor: getLapColor(lap.id, selectedLapIds, fastestLapId) } : undefined}
               >
                 {isSelected && (
                   <svg className="w-3 h-3 text-white" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={3}>
@@ -81,11 +84,11 @@ export default function LapList({ laps, fastestLapId, selectedLapIds, onSelectio
               <div className="flex-1 min-w-0">
                 <div className="flex items-center gap-2">
                   <span className={`font-medium ${isFastest ? 'text-purple-400' : ''}`}>
-                    Lap {lap.id}
+                    第 {lap.id} 圈
                   </span>
                   {isFastest && (
                     <span className="text-[10px] bg-purple-500/30 text-purple-300 px-1.5 py-0.5 rounded font-medium">
-                      FASTEST
+                      最快
                     </span>
                   )}
                 </div>
@@ -100,6 +103,16 @@ export default function LapList({ laps, fastestLapId, selectedLapIds, onSelectio
           )
         })}
       </div>
+      {onCompare && selectedLapIds.length === 2 && (
+        <div className="px-2 py-2 border-t border-gray-800">
+          <button
+            onClick={() => onCompare(selectedLapIds[0], selectedLapIds[1])}
+            className="w-full px-3 py-2 text-xs font-medium bg-purple-600 hover:bg-purple-500 text-white rounded-lg transition-colors"
+          >
+            🔍 对比分析
+          </button>
+        </div>
+      )}
     </div>
   )
 }

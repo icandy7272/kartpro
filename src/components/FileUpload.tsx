@@ -1,10 +1,26 @@
 import { useState, useCallback, useRef } from 'react'
+import type { SessionSummary } from '../lib/storage'
 
 interface FileUploadProps {
   onFileSelect: (file: File) => void
+  historySessions?: SessionSummary[]
+  onLoadSession?: (id: string) => void
+  onDeleteSession?: (id: string) => void
 }
 
-export default function FileUpload({ onFileSelect }: FileUploadProps) {
+function formatLapTime(seconds: number): string {
+  const mins = Math.floor(seconds / 60)
+  const secs = seconds % 60
+  return mins > 0 ? `${mins}:${secs.toFixed(3).padStart(6, '0')}` : `${secs.toFixed(3)}s`
+}
+
+function formatDate(date: Date): string {
+  const d = new Date(date)
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')} ${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`
+}
+
+export default function FileUpload({ onFileSelect, historySessions, onLoadSession, onDeleteSession }: FileUploadProps) {
+  const [deletingId, setDeletingId] = useState<string | null>(null)
   const [isDragging, setIsDragging] = useState(false)
   const [fileSizeWarning, setFileSizeWarning] = useState<string | null>(null)
   const inputRef = useRef<HTMLInputElement>(null)
@@ -15,7 +31,7 @@ export default function FileUpload({ onFileSelect }: FileUploadProps) {
       const sizeGB = file.size / (1024 * 1024 * 1024)
       if (sizeGB > 1) {
         setFileSizeWarning(
-          `This file is ${sizeGB.toFixed(1)} GB. Large files may take a while to process and could cause browser performance issues.`
+          `文件大小 ${sizeGB.toFixed(1)} GB，大文件处理可能较慢，请耐心等待。`
         )
       }
       onFileSelect(file)
@@ -44,7 +60,8 @@ export default function FileUpload({ onFileSelect }: FileUploadProps) {
       const files = e.dataTransfer.files
       if (files.length > 0) {
         const file = files[0]
-        if (file.name.toLowerCase().endsWith('.mp4')) {
+        const name = file.name.toLowerCase()
+        if (name.endsWith('.mp4') || name.endsWith('.geojson') || name.endsWith('.json') || name.endsWith('.vbo')) {
           handleFile(file)
         }
       }
@@ -93,16 +110,16 @@ export default function FileUpload({ onFileSelect }: FileUploadProps) {
             </svg>
           </div>
           <h1 className="text-3xl font-bold text-gray-100 mb-2">KartPro</h1>
-          <p className="text-lg text-purple-400 mb-6">Karting Lap Analysis</p>
+          <p className="text-lg text-purple-400 mb-6">卡丁车圈速分析</p>
           <p className="text-gray-400 mb-2">
-            Drag and drop your GoPro video file here
+            拖拽文件到这里
           </p>
-          <p className="text-gray-500 text-sm">Accepts .mp4 files with GPS telemetry data</p>
+          <p className="text-gray-500 text-sm">支持 .mp4（GoPro 视频）、.geojson（GPS 轨迹）或 .vbo（RaceChrono / VBOX）文件</p>
         </div>
 
         <div className="flex items-center gap-4 justify-center mb-6">
           <div className="h-px bg-gray-700 flex-1" />
-          <span className="text-gray-500 text-sm">or</span>
+          <span className="text-gray-500 text-sm">或</span>
           <div className="h-px bg-gray-700 flex-1" />
         </div>
 
@@ -110,13 +127,13 @@ export default function FileUpload({ onFileSelect }: FileUploadProps) {
           onClick={() => inputRef.current?.click()}
           className="px-8 py-3 bg-purple-600 hover:bg-purple-500 text-white font-medium rounded-lg transition-colors"
         >
-          Browse Files
+          浏览文件
         </button>
 
         <input
           ref={inputRef}
           type="file"
-          accept=".mp4,.MP4"
+          accept=".mp4,.MP4,.geojson,.json,.vbo,.VBO"
           onChange={handleInputChange}
           className="hidden"
         />
@@ -127,6 +144,68 @@ export default function FileUpload({ onFileSelect }: FileUploadProps) {
           </div>
         )}
       </div>
+
+      {historySessions && historySessions.length > 0 && (
+        <div className="w-full max-w-2xl mt-8">
+          <h2 className="text-lg font-semibold text-gray-300 mb-4">历史记录</h2>
+          <div className="space-y-2">
+            {historySessions.map((s) => (
+              <div
+                key={s.id}
+                className="flex items-center gap-4 bg-gray-900 border border-gray-700 rounded-lg px-5 py-3 hover:border-purple-500/50 transition-colors cursor-pointer group"
+                onClick={() => onLoadSession?.(s.id)}
+              >
+                <div className="flex-1 min-w-0">
+                  <div className="flex items-center gap-3">
+                    <span className="text-gray-100 font-medium truncate">{s.filename}</span>
+                    <span className="text-gray-500 text-xs shrink-0">{formatDate(s.date)}</span>
+                  </div>
+                  <div className="flex items-center gap-4 mt-1 text-sm text-gray-400">
+                    <span>{s.lapCount} 圈</span>
+                    <span>最快 {formatLapTime(s.fastestLap)}</span>
+                  </div>
+                </div>
+                {deletingId === s.id ? (
+                  <div className="flex items-center gap-2 shrink-0">
+                    <button
+                      onClick={(e) => {
+                        e.stopPropagation()
+                        onDeleteSession?.(s.id)
+                        setDeletingId(null)
+                      }}
+                      className="px-3 py-1 text-xs bg-red-600 hover:bg-red-500 text-white rounded transition-colors"
+                    >
+                      确认删除
+                    </button>
+                    <button
+                      onClick={(e) => {
+                        e.stopPropagation()
+                        setDeletingId(null)
+                      }}
+                      className="px-3 py-1 text-xs bg-gray-700 hover:bg-gray-600 text-gray-300 rounded transition-colors"
+                    >
+                      取消
+                    </button>
+                  </div>
+                ) : (
+                  <button
+                    onClick={(e) => {
+                      e.stopPropagation()
+                      setDeletingId(s.id)
+                    }}
+                    className="opacity-0 group-hover:opacity-100 p-1.5 text-gray-500 hover:text-red-400 transition-all"
+                    title="删除"
+                  >
+                    <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
+                      <path strokeLinecap="round" strokeLinejoin="round" d="m14.74 9-.346 9m-4.788 0L9.26 9m9.968-3.21c.342.052.682.107 1.022.166m-1.022-.165L18.16 19.673a2.25 2.25 0 01-2.244 2.077H8.084a2.25 2.25 0 01-2.244-2.077L4.772 5.79m14.456 0a48.108 48.108 0 00-3.478-.397m-12 .562c.34-.059.68-.114 1.022-.165m0 0a48.11 48.11 0 013.478-.397m7.5 0v-.916c0-1.18-.91-2.164-2.09-2.201a51.964 51.964 0 00-3.32 0c-1.18.037-2.09 1.022-2.09 2.201v.916m7.5 0a48.667 48.667 0 00-7.5 0" />
+                    </svg>
+                  </button>
+                )}
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
     </div>
   )
 }

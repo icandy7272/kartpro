@@ -1,126 +1,326 @@
-import type { Lap, Corner } from '../../types'
+import type { GPSPoint, Corner } from '../../types'
 
-/**
- * Calculate bearing in degrees from point (lat1, lng1) to (lat2, lng2).
- */
-function bearing(lat1: number, lng1: number, lat2: number, lng2: number): number {
-  const dLng = ((lng2 - lng1) * Math.PI) / 180
-  const lat1Rad = (lat1 * Math.PI) / 180
-  const lat2Rad = (lat2 * Math.PI) / 180
+const R_EARTH_M = 6_371_000.0
 
-  const y = Math.sin(dLng) * Math.cos(lat2Rad)
-  const x =
-    Math.cos(lat1Rad) * Math.sin(lat2Rad) -
-    Math.sin(lat1Rad) * Math.cos(lat2Rad) * Math.cos(dLng)
+// ---- Geometry helpers ----
 
-  return ((Math.atan2(y, x) * 180) / Math.PI + 360) % 360
+export interface XYPoint {
+  x: number
+  y: number
 }
 
 /**
- * Compute the smallest signed angle difference between two bearings.
- * Returns value in range [-180, 180].
+ * Project GPS coordinates to local XY plane (meters) using equirectangular projection.
+ * Uses the centroid of all points as origin.
  */
-function angleDiff(a: number, b: number): number {
-  let diff = b - a
-  while (diff > 180) diff -= 360
-  while (diff < -180) diff += 360
-  return diff
+export function projectToXY(points: GPSPoint[]): XYPoint[] {
+  const n = points.length
+  let sumLat = 0
+  let sumLng = 0
+  for (const p of points) {
+    sumLat += p.lat
+    sumLng += p.lng
+  }
+  const lat0 = sumLat / n
+  const lng0 = sumLng / n
+  const cosLat0 = Math.cos((lat0 * Math.PI) / 180)
+
+  return points.map((p) => ({
+    x: ((p.lng - lng0) * Math.PI / 180) * R_EARTH_M * cosLat0,
+    y: ((p.lat - lat0) * Math.PI / 180) * R_EARTH_M,
+  }))
 }
 
 /**
- * Detect corners in a lap using heading change rate.
- * A corner is a contiguous region where the heading change rate exceeds a threshold.
+ * Compute pairwise Euclidean distances between consecutive XY points.
  */
-export function detectCorners(lap: Lap): Corner[] {
-  const points = lap.points
-  if (points.length < 10) return []
-
-  // Compute bearing at each point (using next point)
-  const bearings: number[] = []
-  for (let i = 0; i < points.length - 1; i++) {
-    bearings.push(
-      bearing(points[i].lat, points[i].lng, points[i + 1].lat, points[i + 1].lng)
-    )
+export function pairwiseDistances(xy: XYPoint[]): number[] {
+  const dists: number[] = []
+  for (let i = 0; i < xy.length - 1; i++) {
+    const dx = xy[i + 1].x - xy[i].x
+    const dy = xy[i + 1].y - xy[i].y
+    dists.push(Math.hypot(dx, dy))
   }
-  bearings.push(bearings[bearings.length - 1]) // duplicate last
+  return dists
+}
 
-  // Compute heading change rate (degrees per second)
-  const headingRates: number[] = new Array(points.length).fill(0)
-  for (let i = 1; i < bearings.length; i++) {
-    const dt = (points[i].time - points[i - 1].time) / 1000
-    if (dt > 0) {
-      headingRates[i] = Math.abs(angleDiff(bearings[i - 1], bearings[i])) / dt
-    }
+/**
+ * Compute cumulative arc-length distances.
+ */
+export function cumulativeDistance(segLengths: number[]): number[] {
+  const arc = [0.0]
+  for (const d of segLengths) {
+    arc.push(arc[arc.length - 1] + d)
+  }
+  return arc
+}
+
+/**
+ * Unwrap an angle difference to [-pi, pi].
+ */
+function unwrapAngle(delta: number): number {
+  return ((delta + Math.PI) % (2 * Math.PI) + 2 * Math.PI) % (2 * Math.PI) - Math.PI
+}
+
+/**
+ * Compute heading at each point using a sliding window (linear, non-circular).
+ * halfStep controls how far ahead/behind we look.
+ */
+export function linearHeadings(xy: XYPoint[], halfStep: number = 3): number[] {
+  const n = xy.length
+  const headings: number[] = new Array(n).fill(0)
+  for (let i = 0; i < n; i++) {
+    const a = Math.max(0, i - halfStep)
+    const b = Math.min(n - 1, i + halfStep)
+    const dx = xy[b].x - xy[a].x
+    const dy = xy[b].y - xy[a].y
+    headings[i] = Math.atan2(dy, dx)
+  }
+  return headings
+}
+
+/**
+ * Compute smoothed curvature (rad/m) at each point.
+ * 1. Compute headings with a sliding window
+ * 2. Compute raw curvature = heading_change / segment_distance
+ * 3. Smooth curvature with a moving average
+ */
+export function smoothedCurvature(
+  xy: XYPoint[],
+  segLengths: number[],
+  smoothingHalfWindowM: number = 7.5,
+  headingHalfStep: number = 3,
+): { curvature: number[]; headings: number[]; smoothHalfSamples: number } {
+  const n = xy.length
+
+  // Median segment spacing
+  const sortedSegs = [...segLengths].sort((a, b) => a - b)
+  const spacing = sortedSegs[Math.floor(sortedSegs.length / 2)]
+  const smoothHalfSamples = Math.max(3, Math.round(smoothingHalfWindowM / spacing))
+
+  // Compute headings
+  const headings = linearHeadings(xy, headingHalfStep)
+
+  // Raw curvature: heading change / distance
+  const rawCurvature: number[] = new Array(n).fill(0)
+  for (let i = 1; i < n; i++) {
+    const dist = segLengths[i - 1]
+    rawCurvature[i] = unwrapAngle(headings[i] - headings[i - 1]) / Math.max(dist, 1e-6)
   }
 
-  // Smooth the heading rate with a small window to reduce noise
-  const smoothWindow = 3
-  const smoothedRates: number[] = new Array(points.length).fill(0)
-  for (let i = 0; i < points.length; i++) {
-    const start = Math.max(0, i - Math.floor(smoothWindow / 2))
-    const end = Math.min(points.length - 1, i + Math.floor(smoothWindow / 2))
+  // Smooth curvature with moving average (linear, clamped at edges)
+  const smoothed: number[] = new Array(n).fill(0)
+  for (let i = 0; i < n; i++) {
+    const lo = Math.max(0, i - smoothHalfSamples)
+    const hi = Math.min(n - 1, i + smoothHalfSamples)
     let sum = 0
-    for (let j = start; j <= end; j++) {
-      sum += headingRates[j]
+    for (let k = lo; k <= hi; k++) {
+      sum += rawCurvature[k]
     }
-    smoothedRates[i] = sum / (end - start + 1)
+    smoothed[i] = sum / (hi - lo + 1)
   }
 
-  // Threshold for corner detection: heading rate > 15 deg/s
-  const CORNER_THRESHOLD = 15
-  // Minimum number of consecutive points to be a corner
-  const MIN_CORNER_POINTS = 3
-  // Minimum gap between corners (in points)
-  const MIN_GAP = 5
+  return { curvature: smoothed, headings, smoothHalfSamples }
+}
 
-  // Find contiguous regions above threshold
-  const regions: Array<{ start: number; end: number }> = []
-  let inCorner = false
-  let regionStart = 0
+// ---- Corner region detection ----
 
-  for (let i = 0; i < points.length; i++) {
-    if (smoothedRates[i] >= CORNER_THRESHOLD) {
-      if (!inCorner) {
-        regionStart = i
-        inCorner = true
+interface Region {
+  start: number
+  end: number
+}
+
+/**
+ * Find contiguous regions where |curvature| >= threshold and length >= minCornerLengthM.
+ */
+function detectRegions(
+  absCurvature: number[],
+  arc: number[],
+  threshold: number,
+  minCornerLengthM: number = 10.0,
+): Region[] {
+  const n = absCurvature.length
+  const mask = absCurvature.map((v) => v >= threshold)
+
+  const regions: Region[] = []
+  let active = false
+  let startIdx = 0
+
+  for (let i = 0; i < n; i++) {
+    if (mask[i] && !active) {
+      startIdx = i
+      active = true
+    } else if (active && !mask[i]) {
+      const endIdx = i - 1
+      if (arc[endIdx] - arc[startIdx] >= minCornerLengthM) {
+        regions.push({ start: startIdx, end: endIdx })
       }
+      active = false
+    }
+  }
+  // Handle region extending to end
+  if (active) {
+    const endIdx = n - 1
+    if (arc[endIdx] - arc[startIdx] >= minCornerLengthM) {
+      regions.push({ start: startIdx, end: endIdx })
+    }
+  }
+
+  return regions
+}
+
+// ---- Threshold sweep auto-calibration ----
+
+interface SweepEntry {
+  threshold: number
+  count: number
+}
+
+/**
+ * Sweep thresholds from 0.005 to 0.030 rad/m and count corners at each.
+ */
+function sweepThreshold(
+  absCurvature: number[],
+  arc: number[],
+  minCornerLengthM: number = 10.0,
+): SweepEntry[] {
+  const sweep: SweepEntry[] = []
+  for (let i = 5; i <= 30; i++) {
+    const threshold = i / 1000
+    const regions = detectRegions(absCurvature, arc, threshold, minCornerLengthM)
+    sweep.push({ threshold, count: regions.length })
+  }
+  return sweep
+}
+
+/**
+ * Find the best threshold by looking for stable bands of corner counts.
+ * A "band" is a contiguous range of thresholds producing the same corner count.
+ * We pick the band with count in [6, 15] that has the widest range (most stable),
+ * and use the middle threshold of that band.
+ */
+function selectThreshold(sweep: SweepEntry[]): number | null {
+  // Group into bands: contiguous threshold runs with the same count
+  interface Band {
+    count: number
+    thresholds: number[]
+  }
+  const bands: Band[] = []
+
+  for (const entry of sweep) {
+    if (
+      bands.length > 0 &&
+      bands[bands.length - 1].count === entry.count &&
+      Math.round((entry.threshold - bands[bands.length - 1].thresholds[bands[bands.length - 1].thresholds.length - 1]) * 1000) === 1
+    ) {
+      bands[bands.length - 1].thresholds.push(entry.threshold)
     } else {
-      if (inCorner) {
-        if (i - regionStart >= MIN_CORNER_POINTS) {
-          regions.push({ start: regionStart, end: i - 1 })
-        }
-        inCorner = false
+      bands.push({ count: entry.count, thresholds: [entry.threshold] })
+    }
+  }
+
+  // Filter to bands with count in [6, 15]
+  const validBands = bands.filter((b) => b.count >= 6 && b.count <= 15)
+
+  if (validBands.length === 0) {
+    // Fallback: try any band with count >= 3
+    const fallback = bands.filter((b) => b.count >= 3)
+    if (fallback.length === 0) return null
+    const best = fallback.reduce((a, b) => (a.thresholds.length > b.thresholds.length ? a : b))
+    return best.thresholds[Math.floor(best.thresholds.length / 2)]
+  }
+
+  // Pick the widest band
+  const best = validBands.reduce((a, b) => (a.thresholds.length > b.thresholds.length ? a : b))
+  return best.thresholds[Math.floor(best.thresholds.length / 2)]
+}
+
+// ---- Accumulated angle for a region ----
+
+function regionAngle(headings: number[], start: number, end: number): number {
+  let angle = 0
+  for (let i = start; i < end; i++) {
+    angle += unwrapAngle(headings[i + 1] - headings[i])
+  }
+  return angle
+}
+
+// ---- Corner type classification ----
+
+function classifyCorner(angleDeg: number): string {
+  if (angleDeg >= 90) return '发卡弯'
+  if (angleDeg >= 60) return '低速弯'
+  if (angleDeg >= 30) return '中速弯'
+  return '高速弯'
+}
+
+// ---- Main entry point ----
+
+/**
+ * Detect corners in a set of GPS points using curvature-based analysis.
+ *
+ * Algorithm:
+ * 1. Project GPS to local XY (meters)
+ * 2. Compute pairwise distances and cumulative arc length
+ * 3. Compute smoothed curvature (rad/m)
+ * 4. Run threshold sweep to auto-calibrate
+ * 5. Detect corner regions above threshold
+ * 6. For each region: direction, angle, apex, label
+ */
+export function detectCorners(points: GPSPoint[]): Corner[] {
+  if (points.length < 20) return []
+
+  // 1. Project to XY
+  const xy = projectToXY(points)
+
+  // 2. Pairwise distances and cumulative arc length
+  const segLengths = pairwiseDistances(xy)
+  const arc = cumulativeDistance(segLengths)
+
+  // 3. Smoothed curvature
+  const { curvature, headings } = smoothedCurvature(xy, segLengths)
+
+  // 4. Absolute curvature for thresholding
+  const absCurvature = curvature.map((v) => Math.abs(v))
+
+  // 5. Threshold sweep auto-calibration
+  const sweep = sweepThreshold(absCurvature, arc)
+  const threshold = selectThreshold(sweep)
+  if (threshold === null) {
+    // Fallback: use a reasonable default
+    return fallbackDetectCorners(points)
+  }
+
+  // 6. Detect regions
+  const regions = detectRegions(absCurvature, arc, threshold)
+  if (regions.length === 0) return []
+
+  // 7. Build Corner objects
+  const corners: Corner[] = regions.map((region, idx) => {
+    // Apex: point with max |curvature| in region
+    let apexIdx = region.start
+    let maxCurv = 0
+    for (let i = region.start; i <= region.end; i++) {
+      if (absCurvature[i] > maxCurv) {
+        maxCurv = absCurvature[i]
+        apexIdx = i
       }
     }
-  }
-  // Handle corner that extends to end
-  if (inCorner && points.length - regionStart >= MIN_CORNER_POINTS) {
-    regions.push({ start: regionStart, end: points.length - 1 })
-  }
 
-  // Merge regions that are very close together (likely the same corner)
-  const merged: Array<{ start: number; end: number }> = []
-  for (const region of regions) {
-    if (merged.length > 0 && region.start - merged[merged.length - 1].end < MIN_GAP) {
-      merged[merged.length - 1].end = region.end
-    } else {
-      merged.push({ ...region })
-    }
-  }
+    // Accumulated heading change for direction and angle
+    const angle = regionAngle(headings, region.start, region.end)
+    const angleDeg = Math.abs(angle * 180 / Math.PI)
+    const direction: 'left' | 'right' = angle > 0 ? 'left' : 'right'
 
-  // Build Corner objects
-  const corners: Corner[] = merged.map((region, idx) => {
+    // Speed info
     const cornerPoints = points.slice(region.start, region.end + 1)
     const speeds = cornerPoints.map((p) => p.speed)
-    const minSpeed = Math.min(...speeds)
+    const minSpeed = Math.min(...speeds) * 3.6 // convert to km/h
 
-    // Entry speed: speed at the start of the corner (or 1 point before if available)
     const entryIdx = Math.max(0, region.start - 1)
-    const entrySpeed = points[entryIdx].speed
-
-    // Exit speed: speed at the end of the corner (or 1 point after if available)
     const exitIdx = Math.min(points.length - 1, region.end + 1)
-    const exitSpeed = points[exitIdx].speed
+    const entrySpeed = points[entryIdx].speed * 3.6
+    const exitSpeed = points[exitIdx].speed * 3.6
 
     const startTime = points[region.start].time
     const endTime = points[region.end].time
@@ -131,6 +331,12 @@ export function detectCorners(lap: Lap): Corner[] {
       name: `T${idx + 1}`,
       startIndex: region.start,
       endIndex: region.end,
+      midpointIndex: apexIdx, // use apex as midpoint
+      apexIndex: apexIdx,
+      apexDistance: arc[apexIdx],
+      direction,
+      angle: angleDeg,
+      type: classifyCorner(angleDeg),
       entrySpeed,
       minSpeed,
       exitSpeed,
@@ -139,4 +345,61 @@ export function detectCorners(lap: Lap): Corner[] {
   })
 
   return corners
+}
+
+/**
+ * Fallback corner detection using simple heading change rate.
+ * Used when the threshold sweep fails to find a stable band.
+ */
+function fallbackDetectCorners(points: GPSPoint[]): Corner[] {
+  if (points.length < 20) return []
+
+  const xy = projectToXY(points)
+  const segLengths = pairwiseDistances(xy)
+  const arc = cumulativeDistance(segLengths)
+  const { curvature, headings } = smoothedCurvature(xy, segLengths)
+  const absCurvature = curvature.map((v) => Math.abs(v))
+
+  // Use a fixed threshold of 0.010 rad/m as fallback
+  const threshold = 0.010
+  const regions = detectRegions(absCurvature, arc, threshold)
+
+  return regions.map((region, idx) => {
+    let apexIdx = region.start
+    let maxCurv = 0
+    for (let i = region.start; i <= region.end; i++) {
+      if (absCurvature[i] > maxCurv) {
+        maxCurv = absCurvature[i]
+        apexIdx = i
+      }
+    }
+
+    const angle = regionAngle(headings, region.start, region.end)
+    const angleDeg = Math.abs(angle * 180 / Math.PI)
+    const direction: 'left' | 'right' = angle > 0 ? 'left' : 'right'
+
+    const cornerPoints = points.slice(region.start, region.end + 1)
+    const speeds = cornerPoints.map((p) => p.speed)
+    const minSpeed = Math.min(...speeds) * 3.6
+
+    const entryIdx = Math.max(0, region.start - 1)
+    const exitIdx = Math.min(points.length - 1, region.end + 1)
+
+    return {
+      id: idx + 1,
+      name: `T${idx + 1}`,
+      startIndex: region.start,
+      endIndex: region.end,
+      midpointIndex: apexIdx,
+      apexIndex: apexIdx,
+      apexDistance: arc[apexIdx],
+      direction,
+      angle: angleDeg,
+      type: classifyCorner(angleDeg),
+      entrySpeed: points[entryIdx].speed * 3.6,
+      minSpeed,
+      exitSpeed: points[exitIdx].speed * 3.6,
+      duration: (points[region.end].time - points[region.start].time) / 1000,
+    }
+  })
 }
