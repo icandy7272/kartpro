@@ -200,21 +200,26 @@ export default function AnalysisReport({ analysis }: AnalysisReportProps) {
               <th className="text-left py-1 pr-2">弯道</th>
               <th className="text-right py-1 pr-2"><span className="inline-flex items-center justify-end">最佳时间<InfoTip text="该弯道在所有圈中的最快耗时" /></span></th>
               <th className="text-right py-1 pr-2">来自</th>
-              <th className="text-right py-1"><span className="inline-flex items-center justify-end">节省<InfoTip text="相比最快圈在该弯道可以节省的时间" /></span></th>
+              <th className="text-right py-1 pr-2"><span className="inline-flex items-center justify-end">节省<InfoTip text="相比最快整圈在该弯道可以节省的时间" /></span></th>
+              <th className="text-left py-1"><span className="inline-flex items-center justify-start">为什么更快<InfoTip text="该弯道最快的那一圈，跟最快整圈在同一弯道相比，速度上有什么不同。注意：速度更高不一定时间更短，走线更紧凑可以用更低的速度换来更短的距离。" /></span></th>
             </tr>
           </thead>
           <tbody>
             {theoreticalBest.perCorner.map((c) => (
               <tr key={c.corner} className="border-b border-gray-800/50 text-gray-400">
-                <td className="py-1 pr-2 font-medium text-gray-300">{c.corner}</td>
-                <td className="text-right py-1 pr-2">{c.bestTime.toFixed(3)}s</td>
-                <td className="text-right py-1 pr-2 text-gray-500">第{c.bestLap}圈</td>
-                <td className="text-right py-1">
+                <td className="py-1.5 pr-2 font-medium text-gray-300">{c.corner}</td>
+                <td className="text-right py-1.5 pr-2">{c.bestTime.toFixed(3)}s</td>
+                <td className="text-right py-1.5 pr-2 text-gray-500">第{c.bestLap}圈</td>
+                <td className="text-right py-1.5 pr-2">
                   {c.savedVsFastest > 0.001 ? (
                     <span className="text-green-400">-{c.savedVsFastest.toFixed(3)}s</span>
                   ) : (
-                    <span className="text-gray-600">-</span>
+                    <span className="text-gray-600">—</span>
                   )}
+                </td>
+                <td className="py-1.5 text-[10px] text-gray-500">
+                  <div>{c.reason ?? '—'}</div>
+                  {c.lineNote && <div className="text-purple-400/70 mt-0.5">走线: {c.lineNote}</div>}
                 </td>
               </tr>
             ))}

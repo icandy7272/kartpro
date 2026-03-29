@@ -1,4 +1,4 @@
-import { useMemo, useRef, useEffect, useCallback } from 'react'
+import { useMemo, useRef, useEffect } from 'react'
 import ReactECharts from 'echarts-for-react'
 import type { LapAnalysis } from '../types'
 import { getLapColor } from '../lib/lap-colors'
@@ -37,7 +37,7 @@ export default function SpeedChart({ analyses, selectedLapIds, fastestLapId, onH
         }
       }
 
-      inst.on('updateAxisPointer', handler)
+      inst.on('updateAxisPointer', handler as any)
 
       // Listen on the zrender layer for mouseout
       const zr = (inst as unknown as { getZr: () => { on: (e: string, h: () => void) => void } }).getZr()

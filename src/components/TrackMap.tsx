@@ -194,7 +194,7 @@ export default function TrackMap({
 
       {/* Multiple lap overlay */}
       {selectedLaps.length > 1 &&
-        selectedLaps.map((lap, idx) => {
+        selectedLaps.map((lap) => {
           const positions = lap.points.map((p) => [p.lat, p.lng] as [number, number])
           const color = getLapColor(lap.id, selectedLapIds, fastestLapId)
           return <Polyline key={lap.id} positions={positions} color={color} weight={3} opacity={0.8} />
@@ -281,11 +281,11 @@ export default function TrackMap({
             {(brakePoints?.length || throttlePoints?.length) ? (
               <>
                 <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 4 }}>
-                  <span style={{ display: 'inline-block', width: 10, height: 10, borderRadius: '50%', background: '#ef4444', border: '1.5px solid #fff' }}></span>
+                  <span style={{ display: 'inline-block', width: 10, height: 10, background: '#ef4444', border: '1.5px solid #fff' }}></span>
                   <span>刹车点</span>
                 </div>
                 <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-                  <span style={{ display: 'inline-block', width: 10, height: 10, borderRadius: '50%', background: '#22c55e', border: '1.5px solid #fff' }}></span>
+                  <span style={{ display: 'inline-block', width: 0, height: 0, borderLeft: '5px solid transparent', borderRight: '5px solid transparent', borderBottom: '9px solid #22c55e' }}></span>
                   <span>油门点</span>
                 </div>
               </>
@@ -296,26 +296,30 @@ export default function TrackMap({
 
       {/* Brake point markers — red squares */}
       {brakePoints && brakePoints.map((bp, i) => (
-        <CircleMarker
+        <Marker
           key={`brake-${i}`}
-          center={[bp.lat, bp.lng]}
-          radius={5}
-          pathOptions={{ color: '#ffffff', fillColor: '#ef4444', fillOpacity: 1, weight: 1.5 }}
-        >
-          <span />
-        </CircleMarker>
+          position={[bp.lat, bp.lng]}
+          icon={L.divIcon({
+            className: '',
+            html: '<div style="width:10px;height:10px;background:#ef4444;border:1.5px solid #fff;transform:rotate(0deg)"></div>',
+            iconSize: [10, 10],
+            iconAnchor: [5, 5],
+          })}
+        />
       ))}
 
-      {/* Throttle point markers — green squares */}
+      {/* Throttle point markers — green triangles */}
       {throttlePoints && throttlePoints.map((tp, i) => (
-        <CircleMarker
+        <Marker
           key={`throttle-${i}`}
-          center={[tp.lat, tp.lng]}
-          radius={5}
-          pathOptions={{ color: '#ffffff', fillColor: '#22c55e', fillOpacity: 1, weight: 1.5 }}
-        >
-          <span />
-        </CircleMarker>
+          position={[tp.lat, tp.lng]}
+          icon={L.divIcon({
+            className: '',
+            html: '<div style="width:0;height:0;border-left:6px solid transparent;border-right:6px solid transparent;border-bottom:10px solid #22c55e;filter:drop-shadow(0 0 1px #fff)"></div>',
+            iconSize: [12, 10],
+            iconAnchor: [6, 5],
+          })}
+        />
       ))}
 
       {/* Hover position markers — one per selected lap */}

@@ -1,10 +1,17 @@
-import type { Lap, Corner, LapAnalysis } from '../../types'
+import type { Lap, Corner, LapAnalysis, GPSPoint } from '../../types'
 
 export interface FullAnalysis {
   theoreticalBest: {
     time: number
     savings: number
-    perCorner: { corner: string; bestTime: number; bestLap: number; savedVsFastest: number }[]
+    perCorner: {
+      corner: string; bestTime: number; bestLap: number; savedVsFastest: number
+      reason?: string // why this lap's corner was fastest vs fastest overall lap
+      bestEntry: number; bestMin: number; bestExit: number // speeds of best corner lap
+      refEntry: number; refMin: number; refExit: number // speeds of fastest overall lap
+      bestDistance: number; refDistance: number // actual GPS distance through corner (meters)
+      lineNote?: string // racing line difference based on actual trajectory data
+    }[]
   }
   cornerPriority: {
     corner: string
@@ -92,6 +99,24 @@ export interface FullAnalysis {
   }[]
 }
 
+/**
+ * Calculate the actual GPS distance (meters) through a corner by summing
+ * haversine distances between consecutive points.
+ */
+function cornerDistance(points: GPSPoint[], startIdx: number, endIdx: number): number {
+  let dist = 0
+  const R = 6371000
+  for (let i = startIdx; i < endIdx && i < points.length - 1; i++) {
+    const dLat = ((points[i + 1].lat - points[i].lat) * Math.PI) / 180
+    const dLng = ((points[i + 1].lng - points[i].lng) * Math.PI) / 180
+    const lat1 = (points[i].lat * Math.PI) / 180
+    const lat2 = (points[i + 1].lat * Math.PI) / 180
+    const a = Math.sin(dLat / 2) ** 2 + Math.cos(lat1) * Math.cos(lat2) * Math.sin(dLng / 2) ** 2
+    dist += 2 * R * Math.asin(Math.sqrt(a))
+  }
+  return dist
+}
+
 function stdDev(values: number[]): number {
   if (values.length === 0) return 0
   const mean = values.reduce((s, v) => s + v, 0) / values.length
@@ -148,11 +173,106 @@ export function generateFullAnalysis(
     if (bestTime === Infinity) bestTime = fastestCornerTime
     theoreticalCornerSum += bestTime
 
+    // Gather speed data: best corner lap vs fastest overall lap
+    const bestAnalysis = analyses.find(a => a.lap.id === bestLapId)
+    const bestCorner = bestAnalysis?.corners[ci]
+    const bestEntry = bestCorner?.entrySpeed ?? 0
+    const bestMin = bestCorner?.minSpeed ?? 0
+    const bestExit = bestCorner?.exitSpeed ?? 0
+
+    // Reference = fastest overall lap's corner speeds
+    const refCorner = fastestAnalysis.corners[ci]
+    const refEntry = refCorner?.entrySpeed ?? 0
+    const refMin = refCorner?.minSpeed ?? 0
+    const refExit = refCorner?.exitSpeed ?? 0
+
+    // Generate reason: why this corner lap was faster than fastest overall lap's same corner
+    const entryDiff = bestEntry - refEntry
+    const minDiff = bestMin - refMin
+    const exitDiff = bestExit - refExit
+
+    // Compute actual GPS distance FIRST — we need this for reasoning
+    const bestLapObj = laps.find(l => l.id === bestLapId)
+    const bestDist = (bestLapObj && bestCorner)
+      ? cornerDistance(bestLapObj.points, bestCorner.startIndex, bestCorner.endIndex)
+      : 0
+    const refDist = refCorner
+      ? cornerDistance(fastestLap.points, refCorner.startIndex, refCorner.endIndex)
+      : 0
+
+    // === Generate reason and line note from MEASURED DATA ONLY ===
+    const distDiff = bestDist - refDist  // negative = shorter line
+    const distPct = refDist > 0 ? (distDiff / refDist) * 100 : 0
+    const shorterLine = distDiff < -0.3
+    const longerLine = distDiff > 0.3
+
+    const reasons: string[] = []
+    let lineNote: string | undefined
+
+    if (bestLapId === fastestLap.id) {
+      reasons.push('最快圈本身最快')
+    } else {
+      // Speed facts (all measured, no guessing)
+      const speedFacts: string[] = []
+      if (Math.abs(entryDiff) > 0.8) speedFacts.push(`入弯${entryDiff > 0 ? '+' : ''}${entryDiff.toFixed(1)}km/h`)
+      if (Math.abs(minDiff) > 0.8) speedFacts.push(`弯心${minDiff > 0 ? '+' : ''}${minDiff.toFixed(1)}km/h`)
+      if (Math.abs(exitDiff) > 0.8) speedFacts.push(`出弯${exitDiff > 0 ? '+' : ''}${exitDiff.toFixed(1)}km/h`)
+
+      // Distance fact (measured from GPS)
+      const distFact = shorterLine
+        ? `走线短${Math.abs(distDiff).toFixed(1)}m（-${Math.abs(distPct).toFixed(1)}%）`
+        : longerLine
+          ? `走线长${distDiff.toFixed(1)}m（+${distPct.toFixed(1)}%）`
+          : `走线距离相近`
+
+      // Combine speed + distance into a coherent explanation
+      const avgSpeedDiff = (entryDiff + minDiff + exitDiff) / 3
+      if (avgSpeedDiff > 0.5 && !longerLine) {
+        // Faster speed + same/shorter line → pure speed advantage
+        reasons.push(`速度更高（${speedFacts.join('，')}），${distFact}`)
+      } else if (avgSpeedDiff < -0.5 && shorterLine) {
+        // Slower speed but shorter line → distance advantage
+        reasons.push(`${distFact}，虽然速度偏低（${speedFacts.join('，')}），但距离优势大于速度劣势`)
+      } else if (shorterLine) {
+        reasons.push(`${distFact}${speedFacts.length > 0 ? `，速度差异：${speedFacts.join('，')}` : ''}`)
+      } else if (speedFacts.length > 0) {
+        reasons.push(`${speedFacts.join('，')}，${distFact}`)
+      } else {
+        reasons.push(`速度和距离差异均<1km/h和0.3m，时间节省来自更精准的走线节奏`)
+      }
+
+      // Line note: measured trajectory facts
+      const lineParts: string[] = []
+      lineParts.push(distFact)
+
+      // Apex position from actual GPS indices
+      if (bestCorner && refCorner) {
+        const bestApexRatio = bestCorner.apexIndex
+          ? (bestCorner.apexIndex - bestCorner.startIndex) / Math.max(1, bestCorner.endIndex - bestCorner.startIndex)
+          : 0.5
+        const refApexRatio = refCorner.apexIndex
+          ? (refCorner.apexIndex - refCorner.startIndex) / Math.max(1, refCorner.endIndex - refCorner.startIndex)
+          : 0.5
+        const apexDiffPct = (bestApexRatio - refApexRatio) * 100
+        if (Math.abs(apexDiffPct) > 5) {
+          lineParts.push(apexDiffPct > 0 ? `弯心偏晚${Math.abs(apexDiffPct).toFixed(0)}%` : `弯心偏早${Math.abs(apexDiffPct).toFixed(0)}%`)
+        }
+      }
+
+      lineNote = lineParts.join('；')
+    }
+
     perCornerBest.push({
       corner: corners[ci].name,
       bestTime,
       bestLap: bestLapId,
       savedVsFastest: fastestCornerTime - bestTime,
+      reason: reasons.join('；'),
+      bestEntry, bestMin, bestExit,
+      refEntry, refMin, refExit,
+      bestDistance: bestDist,
+      refDistance: refDist,
+      lineNote,
     })
   }
 
@@ -449,7 +569,6 @@ export function generateFullAnalysis(
   }
 
   const cornerCorrelation: FullAnalysis['cornerCorrelation'] = []
-  const lapTimes = analyses.map((a) => a.lap.duration)
 
   for (let ci = 0; ci < numCorners; ci++) {
     const cornerDurations: number[] = []
@@ -591,8 +710,6 @@ export function generateFullAnalysis(
     const scoring = cornerScoring.find((s) => s.corner === cName)
     const lgCorner = lapGroupsPerCorner.find((l) => l.corner === cName)
     const braking = brakingPattern.find((b) => b.corner === cName)
-    const consistEntry = consistencyData.find((c) => c.corner === cName)
-
     if (!scoring || !braking) continue
 
     const comments: string[] = []

@@ -76,13 +76,6 @@ function deviationColor(absMeters: number): string {
   return 'text-red-400'
 }
 
-function deviationBgColor(absMeters: number): string {
-  if (absMeters < 0.5) return 'bg-green-500'
-  if (absMeters < 1.5) return 'bg-yellow-500'
-  if (absMeters < 3.0) return 'bg-orange-500'
-  return 'bg-red-500'
-}
-
 function consistencyLabel(score: number): { text: string; color: string } {
   if (score >= 85) return { text: '高度一致', color: 'text-green-400' }
   if (score >= 65) return { text: '较一致', color: 'text-yellow-400' }

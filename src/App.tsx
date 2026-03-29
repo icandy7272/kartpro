@@ -84,23 +84,6 @@ function detectStartFinishLine(points: GPSPoint[]): { lat1: number; lng1: number
   }
 }
 
-function lineSegmentIntersects(
-  p1: { lat: number; lng: number },
-  p2: { lat: number; lng: number },
-  p3: { lat: number; lng: number },
-  p4: { lat: number; lng: number }
-): boolean {
-  const d1x = p2.lng - p1.lng
-  const d1y = p2.lat - p1.lat
-  const d2x = p4.lng - p3.lng
-  const d2y = p4.lat - p3.lat
-  const cross = d1x * d2y - d1y * d2x
-  if (Math.abs(cross) < 1e-12) return false
-  const t = ((p3.lng - p1.lng) * d2y - (p3.lat - p1.lat) * d2x) / cross
-  const u = ((p3.lng - p1.lng) * d1y - (p3.lat - p1.lat) * d1x) / cross
-  return t >= 0 && t <= 1 && u >= 0 && u <= 1
-}
-
 // Use the interpolated lap detection from lap-detection.ts
 // Re-exported here for compatibility with components that expect this signature
 import { detectLaps as _detectLapsInterpolated } from './lib/analysis/lap-detection'
@@ -186,7 +169,7 @@ function analyzeLap(lap: Lap, corners: Corner[], refPoints: GPSPoint[]): LapAnal
   })
 
   // Step 2: For each corner, find the matching position in this lap and get speeds
-  const lapCorners: Corner[] = corners.map((c, ci) => {
+  const lapCorners: Corner[] = corners.map((c) => {
     const refMidIdx = Math.min(Math.floor((c.startIndex + c.endIndex) / 2), refPoints.length - 1)
     const refPoint = refPoints[refMidIdx]
 
@@ -234,7 +217,6 @@ function analyzeLap(lap: Lap, corners: Corner[], refPoints: GPSPoint[]): LapAnal
   for (let i = 0; i < lapCorners.length; i++) {
     const currentApexTime = apexTimes[i]
     const prevApexTime = i === 0 ? lap.startTime : apexTimes[i - 1]
-    const nextApexTime = i === lapCorners.length - 1 ? lap.endTime : apexTimes[i + 1]
 
     if (currentApexTime !== null && prevApexTime !== null) {
       // Duration = from previous apex (or lap start) to current apex
@@ -271,7 +253,7 @@ function App() {
   })
 
   const [processingStage, setProcessingStage] = useState<ProcessingStage>('idle')
-  const [rawPoints, setRawPoints] = useState<GPSPoint[]>([])
+  const [, setRawPoints] = useState<GPSPoint[]>([])
   const [smoothedPoints, setSmoothedPoints] = useState<GPSPoint[]>([])
   const [autoDetectedSF, setAutoDetectedSF] = useState<{ lat1: number; lng1: number; lat2: number; lng2: number } | null>(null)
   const [currentFilename, setCurrentFilename] = useState('')

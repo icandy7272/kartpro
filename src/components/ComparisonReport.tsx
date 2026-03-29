@@ -49,13 +49,11 @@ type SortDir = 'asc' | 'desc'
 
 function SortableCornerDeltaTable({
   cornerDeltas,
-  sortedByDelta,
   totalAbsDelta,
   lap1Id,
   lap2Id,
 }: {
   cornerDeltas: { name: string; time1: number; time2: number; delta: number; absDelta: number }[]
-  sortedByDelta: typeof cornerDeltas
   totalAbsDelta: number
   lap1Id: number
   lap2Id: number
@@ -235,9 +233,6 @@ export default function ComparisonReport({
       priority: 'high' | 'medium' | 'low'
     }
     const results: Finding[] = []
-
-    const fasterLap = lap1.duration < lap2.duration ? lap1.id : lap2.id
-    const slowerLap = lap1.duration < lap2.duration ? lap2.id : lap1.id
 
     // 1. Biggest time delta corner - deep analysis
     if (sortedByDelta.length > 0) {
@@ -438,7 +433,6 @@ export default function ComparisonReport({
         {/* Section b: Corner-by-corner delta */}
         <SortableCornerDeltaTable
           cornerDeltas={cornerDeltas}
-          sortedByDelta={sortedByDelta}
           totalAbsDelta={totalAbsDelta}
           lap1Id={lap1.id}
           lap2Id={lap2.id}

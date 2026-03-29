@@ -12,26 +12,6 @@ function haversineDistance(lat1: number, lng1: number, lat2: number, lng2: numbe
   return 2 * R * Math.asin(Math.sqrt(a))
 }
 
-/**
- * Downsample GPS points to a target frequency (Hz).
- * Keeps the first point, then only adds points when enough time has elapsed.
- */
-function downsamplePoints(points: GPSPoint[], targetHz: number): GPSPoint[] {
-  if (points.length < 2) return [...points]
-
-  const minInterval = 1000 / targetHz // minimum ms between points
-  const result: GPSPoint[] = [points[0]]
-
-  for (let i = 1; i < points.length; i++) {
-    const dt = points[i].time - result[result.length - 1].time
-    if (dt >= minInterval) {
-      result.push(points[i])
-    }
-  }
-
-  return result
-}
-
 export async function parseGeoJSONFile(file: File): Promise<GPSPoint[]> {
   const text = await file.text()
   const data = JSON.parse(text)
@@ -61,8 +41,8 @@ export async function parseGeoJSONFile(file: File): Promise<GPSPoint[]> {
       coords = data.features.map((f: any) => f.geometry?.coordinates).filter(Boolean)
       timestamps = data.features.map((f: any) => f.properties?.AbsoluteUtcMicroSec).filter((v: any) => v !== undefined)
       perPointSpeeds = data.features.map((f: any) => f.properties?.speed_ms).filter((v: any) => v !== undefined)
-      if (timestamps.length !== coords.length) timestamps = undefined
-      if (perPointSpeeds && perPointSpeeds.length !== coords.length) perPointSpeeds = undefined
+      if (timestamps!.length !== coords!.length) timestamps = undefined
+      if (perPointSpeeds && perPointSpeeds.length !== coords!.length) perPointSpeeds = undefined
     }
   } else {
     // Single Feature with LineString or array of coordinates
@@ -146,9 +126,9 @@ export async function parseGeoJSONFile(file: File): Promise<GPSPoint[]> {
 }
 
 export async function parseGPSFromFile(file: File): Promise<GPSPoint[]> {
-  let extracted: { rawData: ArrayBuffer; timing: unknown }
+  let extracted: any
   try {
-    extracted = await gpmfExtract(file, { browserMode: true })
+    extracted = await gpmfExtract(file, { browserMode: true } as any)
   } catch (err) {
     throw new Error(
       `Failed to extract GPMF data from file: ${err instanceof Error ? err.message : String(err)}`
@@ -161,10 +141,10 @@ export async function parseGPSFromFile(file: File): Promise<GPSPoint[]> {
 
   let telemetry: Record<string, unknown>
   try {
-    telemetry = await goProTelemetry(
+    telemetry = await (goProTelemetry as any)(
       { rawData: extracted.rawData, timing: extracted.timing },
       { stream: ['GPS5'], smooth: 3, GPS: { fix: 2 } }
-    )
+    ) as Record<string, unknown>
   } catch (err) {
     throw new Error(
       `Failed to parse telemetry: ${err instanceof Error ? err.message : String(err)}`
