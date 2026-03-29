@@ -210,47 +210,7 @@ export default function RacingLineReport({ analyses, fastestLapId }: RacingLineR
         </table>
       </Section>
 
-      {/* Brake/Throttle points */}
-      <Section title="刹车/油门点对比" icon="🔴🟢" tip="对比选中圈与最快圈的刹车点和油门点位置差异。负值=比最快圈更早，正值=比最快圈更晚。">
-        <table className="w-full text-[11px]">
-          <thead>
-            <tr className="text-gray-500 border-b border-gray-700">
-              <th className="text-left py-1 pr-2">弯道</th>
-              <th className="text-right py-1 pr-2">
-                <span className="inline-flex items-center justify-end">
-                  刹车速度<InfoTip text="开始刹车时的速度 (km/h)" />
-                </span>
-              </th>
-              <th className="text-right py-1 pr-2">参考刹车速度</th>
-              <th className="text-right py-1 pr-2">
-                <span className="inline-flex items-center justify-end">
-                  油门速度<InfoTip text="开始加速时的速度 (km/h)" />
-                </span>
-              </th>
-              <th className="text-right py-1">参考油门速度</th>
-            </tr>
-          </thead>
-          <tbody>
-            {current.corners.map((c) => (
-              <tr key={c.cornerName} className="border-b border-gray-800/50 text-gray-400">
-                <td className="py-1.5 pr-2 font-medium text-gray-300">{c.cornerName}</td>
-                <td className="text-right py-1.5 pr-2">
-                  {c.brakePoint ? `${c.brakePoint.speed.toFixed(1)}` : '-'}
-                </td>
-                <td className="text-right py-1.5 pr-2 text-gray-500">
-                  {c.refBrakePoint ? `${c.refBrakePoint.speed.toFixed(1)}` : '-'}
-                </td>
-                <td className="text-right py-1.5 pr-2">
-                  {c.throttlePoint ? `${c.throttlePoint.speed.toFixed(1)}` : '-'}
-                </td>
-                <td className="text-right py-1.5 text-gray-500">
-                  {c.refThrottlePoint ? `${c.refThrottlePoint.speed.toFixed(1)}` : '-'}
-                </td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      </Section>
+      {/* Brake/throttle comparison removed — info now shown in corner trajectory maps */}
 
     </div>
   )

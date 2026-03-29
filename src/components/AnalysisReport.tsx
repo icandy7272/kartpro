@@ -166,73 +166,91 @@ function ScoreBar({ score }: { score: number }) {
  * Mini SVG map showing two corner trajectories overlaid for comparison.
  * Gray = fastest overall lap, Purple = best corner lap.
  */
-function CornerTrajectoryMap({ bestLine, refLine, bestLapId, refLapId }: {
+function CornerTrajectoryMap({ bestLine, refLine, bestLapId, refLapId, bestSpeeds, refSpeeds }: {
   bestLine: Array<[number, number]>
   refLine: Array<[number, number]>
   bestLapId: number
   refLapId: number
+  bestSpeeds?: { entry: number; min: number; exit: number }
+  refSpeeds?: { entry: number; min: number; exit: number }
 }) {
   if (bestLine.length < 2 || refLine.length < 2) return null
 
-  // Project GPS coordinates to SVG pixel coordinates
   const allPoints = [...bestLine, ...refLine]
   const minLat = Math.min(...allPoints.map(p => p[0]))
   const maxLat = Math.max(...allPoints.map(p => p[0]))
   const minLng = Math.min(...allPoints.map(p => p[1]))
   const maxLng = Math.max(...allPoints.map(p => p[1]))
 
-  const latRange = maxLat - minLat || 0.0001
-  const lngRange = maxLng - minLng || 0.0001
-
-  // Maintain aspect ratio using cosine correction
   const cosLat = Math.cos(((minLat + maxLat) / 2) * Math.PI / 180)
-  const realWidth = lngRange * cosLat
-  const realHeight = latRange
+  const realWidth = (maxLng - minLng || 0.0001) * cosLat
+  const realHeight = maxLat - minLat || 0.0001
 
-  const w = 200
-  const h = 120
-  const pad = 10
+  const w = 280
+  const h = 140
+  const pad = 20
 
-  // Scale to fit SVG with padding
   const scaleX = (w - pad * 2) / realWidth
   const scaleY = (h - pad * 2) / realHeight
   const scale = Math.min(scaleX, scaleY)
-
   const cx = (w - realWidth * scale) / 2
   const cy = (h - realHeight * scale) / 2
 
   function toSVG(lat: number, lng: number): [number, number] {
-    const x = cx + (lng - minLng) * cosLat * scale
-    const y = cy + (maxLat - lat) * scale // flip Y
-    return [x, y]
+    return [cx + (lng - minLng) * cosLat * scale, cy + (maxLat - lat) * scale]
   }
 
-  const refPoints = refLine.map(p => toSVG(p[0], p[1])).map(p => `${p[0]},${p[1]}`).join(' ')
-  const bestPoints = bestLine.map(p => toSVG(p[0], p[1])).map(p => `${p[0]},${p[1]}`).join(' ')
+  const refPts = refLine.map(p => toSVG(p[0], p[1]))
+  const bestPts = bestLine.map(p => toSVG(p[0], p[1]))
+  const refPolyline = refPts.map(p => `${p[0]},${p[1]}`).join(' ')
+  const bestPolyline = bestPts.map(p => `${p[0]},${p[1]}`).join(' ')
 
-  // Entry/exit markers
-  const refStart = toSVG(refLine[0][0], refLine[0][1])
-  const refEnd = toSVG(refLine[refLine.length - 1][0], refLine[refLine.length - 1][1])
-  const bestStart = toSVG(bestLine[0][0], bestLine[0][1])
-  const bestEnd = toSVG(bestLine[bestLine.length - 1][0], bestLine[bestLine.length - 1][1])
+  // Apex point (midpoint of line)
+  const refApex = refPts[Math.floor(refPts.length / 2)]
+  const bestApex = bestPts[Math.floor(bestPts.length / 2)]
 
   return (
     <div className="mt-1.5 mb-1">
       <svg width={w} height={h} className="bg-gray-900/50 rounded border border-gray-700/30">
-        {/* Reference line (fastest overall lap) — gray */}
-        <polyline points={refPoints} fill="none" stroke="#6b7280" strokeWidth="2.5" opacity="0.6" />
+        {/* Reference line — gray */}
+        <polyline points={refPolyline} fill="none" stroke="#6b7280" strokeWidth="2.5" opacity="0.5" />
         {/* Best corner line — purple */}
-        <polyline points={bestPoints} fill="none" stroke="#a78bfa" strokeWidth="2.5" />
-        {/* Entry/exit dots for ref */}
-        <circle cx={refStart[0]} cy={refStart[1]} r="3" fill="#6b7280" />
-        <circle cx={refEnd[0]} cy={refEnd[1]} r="3" fill="#6b7280" />
-        {/* Entry/exit dots for best */}
-        <circle cx={bestStart[0]} cy={bestStart[1]} r="3" fill="#a78bfa" />
-        <circle cx={bestEnd[0]} cy={bestEnd[1]} r="3" fill="#a78bfa" />
+        <polyline points={bestPolyline} fill="none" stroke="#a78bfa" strokeWidth="2.5" />
+
+        {/* Entry dots */}
+        <circle cx={refPts[0][0]} cy={refPts[0][1]} r="3.5" fill="#3b82f6" stroke="#fff" strokeWidth="0.5" />
+        <circle cx={bestPts[0][0]} cy={bestPts[0][1]} r="3.5" fill="#3b82f6" stroke="#a78bfa" strokeWidth="0.5" />
+
+        {/* Apex dots */}
+        <circle cx={refApex[0]} cy={refApex[1]} r="3.5" fill="#ef4444" stroke="#fff" strokeWidth="0.5" />
+        <circle cx={bestApex[0]} cy={bestApex[1]} r="3.5" fill="#ef4444" stroke="#a78bfa" strokeWidth="0.5" />
+
+        {/* Exit dots */}
+        <circle cx={refPts[refPts.length-1][0]} cy={refPts[refPts.length-1][1]} r="3.5" fill="#06b6d4" stroke="#fff" strokeWidth="0.5" />
+        <circle cx={bestPts[bestPts.length-1][0]} cy={bestPts[bestPts.length-1][1]} r="3.5" fill="#06b6d4" stroke="#a78bfa" strokeWidth="0.5" />
+
+        {/* Speed labels for best line — offset above */}
+        {bestSpeeds && (
+          <>
+            <text x={bestPts[0][0]} y={bestPts[0][1] - 10} textAnchor="middle" fill="#a78bfa" fontSize="8" fontWeight="bold">{bestSpeeds.entry.toFixed(1)}</text>
+            <text x={bestApex[0]} y={bestApex[1] - 10} textAnchor="middle" fill="#a78bfa" fontSize="8" fontWeight="bold">{bestSpeeds.min.toFixed(1)}</text>
+            <text x={bestPts[bestPts.length-1][0]} y={bestPts[bestPts.length-1][1] - 10} textAnchor="middle" fill="#a78bfa" fontSize="8" fontWeight="bold">{bestSpeeds.exit.toFixed(1)}</text>
+          </>
+        )}
+
+        {/* Speed labels for ref line — offset below */}
+        {refSpeeds && (
+          <>
+            <text x={refPts[0][0]} y={refPts[0][1] + 15} textAnchor="middle" fill="#6b7280" fontSize="8">{refSpeeds.entry.toFixed(1)}</text>
+            <text x={refApex[0]} y={refApex[1] + 15} textAnchor="middle" fill="#6b7280" fontSize="8">{refSpeeds.min.toFixed(1)}</text>
+            <text x={refPts[refPts.length-1][0]} y={refPts[refPts.length-1][1] + 15} textAnchor="middle" fill="#6b7280" fontSize="8">{refSpeeds.exit.toFixed(1)}</text>
+          </>
+        )}
       </svg>
       <div className="flex items-center gap-3 mt-0.5 text-[9px] text-gray-500">
-        <span className="flex items-center gap-1"><span className="w-3 h-0.5 bg-gray-500 inline-block" /> 第{refLapId}圈(最快圈)</span>
-        <span className="flex items-center gap-1"><span className="w-3 h-0.5 bg-purple-400 inline-block" /> 第{bestLapId}圈(该弯最快)</span>
+        <span className="flex items-center gap-1"><span className="w-3 h-0.5 bg-gray-500 inline-block" /> 第{refLapId}圈</span>
+        <span className="flex items-center gap-1"><span className="w-3 h-0.5 bg-purple-400 inline-block" /> 第{bestLapId}圈</span>
+        <span className="flex items-center gap-1"><span className="w-1.5 h-1.5 rounded-full bg-blue-500 inline-block" />入弯 <span className="w-1.5 h-1.5 rounded-full bg-red-500 inline-block" />弯心 <span className="w-1.5 h-1.5 rounded-full bg-cyan-500 inline-block" />出弯</span>
       </div>
     </div>
   )
@@ -294,14 +312,16 @@ export default function AnalysisReport({ analysis }: AnalysisReportProps) {
                   )}
                 </td>
                 <td className="py-1.5 text-[10px] text-gray-500">
-                  <div>{c.reason ?? '—'}</div>
-                  {c.lineNote && <div className="text-purple-400/70 mt-0.5">走线: {c.lineNote}</div>}
+                  <div>速度: 入弯{c.bestEntry >= c.refEntry ? '+' : ''}{(c.bestEntry - c.refEntry).toFixed(1)} 弯心{c.bestMin >= c.refMin ? '+' : ''}{(c.bestMin - c.refMin).toFixed(1)} 出弯{c.bestExit >= c.refExit ? '+' : ''}{(c.bestExit - c.refExit).toFixed(1)} km/h</div>
+                  {c.lineNote && <div className="text-purple-400/70 mt-0.5">{c.lineNote}</div>}
                   {c.bestLine && c.refLine && c.bestLap !== fastestVsSlowest.fastestLap && (
                     <CornerTrajectoryMap
                       bestLine={c.bestLine}
                       refLine={c.refLine}
                       bestLapId={c.bestLap}
                       refLapId={fastestVsSlowest.fastestLap}
+                      bestSpeeds={{ entry: c.bestEntry, min: c.bestMin, exit: c.bestExit }}
+                      refSpeeds={{ entry: c.refEntry, min: c.refMin, exit: c.refExit }}
                     />
                   )}
                 </td>
@@ -311,38 +331,10 @@ export default function AnalysisReport({ analysis }: AnalysisReportProps) {
         </table>
       </Section>
 
-      {/* 2. Corner Priority */}
-      <Section title="弯道优先级" icon="🎯" tip="按每个弯道的平均掉时排序。排名越靠前的弯道，优化后对圈速提升越大。">
-        <div className="inline-flex items-center text-[10px] text-gray-500 mb-1.5">平均掉时<InfoTip text="相比最快圈，该弯道在所有圈中的平均额外耗时" /></div>
-        <div className="space-y-1.5">
-          {cornerPriority.map((c) => {
-            const barWidth = Math.min(100, (c.avgDelta / maxPriorityDelta) * 100)
-            const barColor =
-              c.avgDelta > 0.15
-                ? 'bg-red-500'
-                : c.avgDelta > 0.05
-                  ? 'bg-yellow-500'
-                  : 'bg-green-500'
-            return (
-              <div key={c.corner} className="flex items-center gap-2 text-xs">
-                <span className="w-7 font-bold text-gray-200 shrink-0">{c.corner}</span>
-                <div className="flex-1 h-3.5 bg-gray-700/50 rounded overflow-hidden">
-                  <div
-                    className={`h-full ${barColor} rounded`}
-                    style={{ width: `${barWidth}%` }}
-                  />
-                </div>
-                <span className="w-16 text-right text-gray-400 shrink-0">
-                  {c.avgDelta >= 0 ? '+' : ''}{c.avgDelta.toFixed(3)}s
-                </span>
-              </div>
-            )
-          })}
-        </div>
-      </Section>
+      {/* Corner Priority removed — already shown in dashboard card */}
 
       {/* 3. Consistency */}
-      <Section title="一致性诊断" icon="📊" tip="衡量每个弯道在不同圈次中的表现波动。标准差越小越稳定，说明该弯道技术越成熟。">
+      <Section title="一致性诊断" icon="📊" tip="衡量每个弯道在不同圈次中的表现波动。标准差越小越稳定，说明该弯道技术越成熟。" defaultOpen>
         <table className="w-full text-xs border-collapse">
           <thead>
             <tr className="text-gray-500 border-b border-gray-700">
@@ -374,7 +366,7 @@ export default function AnalysisReport({ analysis }: AnalysisReportProps) {
       </Section>
 
       {/* 4. Lap Trend */}
-      <Section title="圈速趋势" icon="📈" tip="显示整个训练中圈速的变化规律，帮助识别体力衰退、轮胎衰减或注意力波动。">
+      <Section title="圈速趋势" defaultOpen icon="📈" tip="显示整个训练中圈速的变化规律，帮助识别体力衰退、轮胎衰减或注意力波动。">
         <div className="mb-2 flex items-center gap-2 text-xs">
           <span className="text-gray-500">趋势:</span>
           <span
@@ -432,7 +424,7 @@ export default function AnalysisReport({ analysis }: AnalysisReportProps) {
       </Section>
 
       {/* 5. Fastest vs Slowest */}
-      <Section title="最快 vs 最慢圈" icon="⚡" tip="对比最快圈和最慢圈在每个弯道的耗时差异，找出最慢圈掉时最多的弯道。">
+      <Section title="最快 vs 最慢圈" defaultOpen icon="⚡" tip="对比最快圈和最慢圈在每个弯道的耗时差异，找出最慢圈掉时最多的弯道。">
         <div className="flex items-center gap-4 mb-3 text-xs">
           <div>
             <span className="text-gray-500">最快: </span>
@@ -474,7 +466,7 @@ export default function AnalysisReport({ analysis }: AnalysisReportProps) {
       </Section>
 
       {/* 6. Braking/Acceleration Pattern with Apex Geometry */}
-      <Section title="弯道几何 & 刹车/加速" icon="🛞" tip="分析每个弯道的制动和加速模式，包括弯心位置、入弯减速量和出弯加速量。">
+      <Section title="弯道几何 & 刹车/加速" defaultOpen icon="🛞" tip="分析每个弯道的制动和加速模式，包括弯心位置、入弯减速量和出弯加速量。">
         <div className="space-y-3">
           {brakingPattern.map((c) => (
             <div key={c.corner} className="bg-gray-900/50 rounded-lg p-3 border border-gray-700/30">
@@ -560,7 +552,7 @@ export default function AnalysisReport({ analysis }: AnalysisReportProps) {
 
       {/* 7. Quick vs Slow Lap Group Analysis */}
       {lapGroups.quickLaps.length > 0 && lapGroups.slowLaps.length > 0 && (
-        <Section title="快慢圈组分析" icon="🔀" tip="将所有圈分为快圈组和慢圈组，对比两组在每个弯道的表现差异。">
+        <Section title="快慢圈组分析" defaultOpen icon="🔀" tip="将所有圈分为快圈组和慢圈组，对比两组在每个弯道的表现差异。">
           <div className="flex items-center gap-6 mb-2">
             <div className="text-center">
               <div className="text-[10px] text-gray-500">快圈组 ({lapGroups.quickLaps.length}圈) 平均</div>
@@ -624,7 +616,7 @@ export default function AnalysisReport({ analysis }: AnalysisReportProps) {
 
       {/* 8. Corner-to-Laptime Correlation */}
       {cornerCorrelation.length > 0 && (
-        <Section title="弯道-圈速相关性" icon="🔗">
+        <Section title="弯道-圈速相关性" defaultOpen icon="🔗">
           <table className="w-full text-xs border-collapse">
             <thead>
               <tr className="text-gray-500 border-b border-gray-700">
@@ -655,7 +647,7 @@ export default function AnalysisReport({ analysis }: AnalysisReportProps) {
 
       {/* 9. Corner Scoring */}
       {cornerScoring.length > 0 && (
-        <Section title="弯道综合评分" icon="📋" tip="综合考虑平均掉时、稳定性、快慢圈差距和单圈最大掉时的加权评分，越高越需要优化">
+        <Section title="弯道综合评分" defaultOpen icon="📋" tip="综合考虑平均掉时、稳定性、快慢圈差距和单圈最大掉时的加权评分，越高越需要优化">
           <div className="space-y-2">
             {cornerScoring.map((c) => (
               <div key={c.corner} className="bg-gray-900/50 rounded p-2.5 border border-gray-700/30">
@@ -695,7 +687,7 @@ export default function AnalysisReport({ analysis }: AnalysisReportProps) {
 
       {/* 10. Training Plan */}
       {trainingPlan.length > 0 && (
-        <Section title="训练计划" icon="📝">
+        <Section title="训练计划" defaultOpen icon="📝">
           <div className="space-y-3">
             {trainingPlan.map((stint) => (
               <div key={stint.stint} className="bg-gray-900/50 rounded-lg p-3 border border-gray-700/30">
@@ -726,7 +718,7 @@ export default function AnalysisReport({ analysis }: AnalysisReportProps) {
 
       {/* 11. Coaching Narrative */}
       {cornerNarrative.length > 0 && (
-        <Section title="教练点评" icon="🗣️">
+        <Section title="教练点评" defaultOpen icon="🗣️">
           <div className="space-y-2">
             {cornerNarrative
               .filter((c) => {

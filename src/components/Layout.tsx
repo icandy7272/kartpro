@@ -423,7 +423,7 @@ export default function Layout({ session, aiConfig, onAiConfigChange, onNewSessi
           {/* Top: Lap sidebar + Map side by side */}
           <div className="flex-1 flex min-h-0">
             {/* Narrow lap sidebar */}
-            <div className="w-[130px] shrink-0 border-r border-gray-800 overflow-y-auto bg-gray-900/50">
+            <div className="w-[160px] shrink-0 border-r border-gray-800 overflow-y-auto bg-gray-900/50">
               <LapList
                 laps={session.laps}
                 fastestLapId={fastestLap.id}
@@ -486,13 +486,12 @@ export default function Layout({ session, aiConfig, onAiConfigChange, onNewSessi
                     <div className="text-[10px] text-green-500">-{theoreticalBest.savings.toFixed(3)}s</div>
                   </div>
                 </div>
-                <button onClick={() => setShowAIChat(true)} className="w-full px-2 py-1 bg-purple-600/80 hover:bg-purple-500 text-white text-[10px] rounded">AI 教练</button>
               </div>
             </Card>
 
             {/* Corner priority */}
             <Card className="overflow-y-auto">
-              <CardHeader title="弯道优先级" extra={<span className="text-[9px] text-gray-500">按掉时排序</span>} />
+              <CardHeader title="提升优先级" extra={<span className="text-[9px] text-gray-500" title="每个弯道相比最快圈的平均掉时，排名越靠前优化收益越大">按掉时排序 ⓘ</span>} />
               <div className="p-2 space-y-1">
                 {fullAnalysis.cornerPriority.map((c) => {
                   const maxDelta = fullAnalysis.cornerPriority[0]?.avgDelta || 0.1
@@ -621,40 +620,7 @@ export default function Layout({ session, aiConfig, onAiConfigChange, onNewSessi
                   </div>
                 </Card>
 
-                {/* Brake/throttle deltas */}
-                <Card className="overflow-y-auto">
-                  <CardHeader title="刹车/油门" extra={<span className="text-[9px] text-purple-400">第{comparisonLapId}圈 Δ</span>} />
-                  <div className="p-2">
-                    <table className="w-full text-[10px]">
-                      <thead>
-                        <tr className="text-gray-500 border-b border-gray-800">
-                          <th className="text-left py-0.5">弯道</th>
-                          <th className="text-right py-0.5">刹车Δ</th>
-                          <th className="text-right py-0.5">油门Δ</th>
-                        </tr>
-                      </thead>
-                      <tbody>
-                        {currentRLA.corners.map((c) => {
-                          const brakeDelta = (c.brakePoint && c.refBrakePoint) ? c.brakePoint.speed - c.refBrakePoint.speed : null
-                          const throttleDelta = (c.throttlePoint && c.refThrottlePoint) ? c.throttlePoint.speed - c.refThrottlePoint.speed : null
-                          const brakeColor = brakeDelta === null ? 'text-gray-600' : brakeDelta > 2 ? 'text-red-400' : brakeDelta < -2 ? 'text-green-400' : 'text-gray-400'
-                          const throttleColor = throttleDelta === null ? 'text-gray-600' : throttleDelta < -2 ? 'text-red-400' : throttleDelta > 2 ? 'text-green-400' : 'text-gray-400'
-                          return (
-                            <tr key={c.cornerName} className="border-b border-gray-800/30">
-                              <td className="py-0.5 font-medium text-gray-300">{c.cornerName}</td>
-                              <td className={`text-right py-0.5 font-mono ${brakeColor}`}>
-                                {brakeDelta !== null ? `${brakeDelta >= 0 ? '▲' : '▼'}${Math.abs(brakeDelta).toFixed(1)}` : '—'}
-                              </td>
-                              <td className={`text-right py-0.5 font-mono ${throttleColor}`}>
-                                {throttleDelta !== null ? `${throttleDelta >= 0 ? '▲' : '▼'}${Math.abs(throttleDelta).toFixed(1)}` : '—'}
-                              </td>
-                            </tr>
-                          )
-                        })}
-                      </tbody>
-                    </table>
-                  </div>
-                </Card>
+                {/* Brake/throttle card removed — info now in corner trajectory maps */}
               </>
             )}
 
