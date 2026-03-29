@@ -133,7 +133,7 @@ export default function FileUpload({ onFileSelect, historySessions, onLoadSessio
         <input
           ref={inputRef}
           type="file"
-          accept=".mp4,.MP4,.geojson,.json,.vbo,.VBO"
+          accept=".mp4,.MP4,.geojson,.json,.vbo,.VBO,text/plain,application/octet-stream,*/*"
           onChange={handleInputChange}
           className="hidden"
         />

@@ -339,7 +339,7 @@ export default function Layout({ session, aiConfig, onAiConfigChange, onNewSessi
         <div className="flex items-center gap-1.5">
           {!comparisonMode && (
             <>
-              <input ref={secondaryFileInputRef} type="file" accept=".mp4,.geojson,.vbo" className="hidden" onChange={(e) => { const file = e.target.files?.[0]; if (file) handleSecondaryFile(file); e.target.value = '' }} />
+              <input ref={secondaryFileInputRef} type="file" accept=".mp4,.geojson,.vbo,.VBO,text/plain,application/octet-stream,*/*" className="hidden" onChange={(e) => { const file = e.target.files?.[0]; if (file) handleSecondaryFile(file); e.target.value = '' }} />
               <button onClick={() => secondaryFileInputRef.current?.click()} disabled={secondaryProcessing} className="px-2.5 py-1 bg-purple-700 hover:bg-purple-600 disabled:bg-gray-700 text-white text-[11px] rounded-md whitespace-nowrap shrink-0">{secondaryProcessing ? '...' : '导入对比'}</button>
             </>
           )}
