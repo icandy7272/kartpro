@@ -135,7 +135,7 @@ export async function parseGPSFromFile(
   onProgress?: (msg: string) => void,
 ): Promise<GPSPoint[]> {
   // Step 1: Extract raw GPMF data using streaming MP4 parser
-  const { rawData, timing } = await extractGpmfFromFile(file, onProgress)
+  const extracted = await extractGpmfFromFile(file, onProgress)
 
   onProgress?.('正在转换 GPS 坐标...')
 
@@ -143,8 +143,8 @@ export async function parseGPSFromFile(
   let telemetry: Record<string, unknown>
   try {
     telemetry = await (goProTelemetry as any)(
-      { rawData, timing: { start: timing.start, duration: timing.duration } },
-      { stream: ['GPS5'], smooth: 3, GPS: { fix: 2 } }
+      { rawData: extracted.rawData, timing: extracted.timing },
+      { stream: ['GPS5'], smooth: 3, GPS: { fix: 2 } },
     ) as Record<string, unknown>
   } catch (err) {
     throw new Error(

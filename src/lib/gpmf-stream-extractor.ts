@@ -1,88 +1,75 @@
 /**
  * Smart GPMF extractor for GoPro videos of ANY size.
  *
- * Instead of loading the entire video file (which OOMs on 4GB+ files),
- * this parser reads the MP4 container structure to locate the GPMF metadata
- * track, then uses File.slice() to read only the metadata samples.
+ * Uses File.slice() for ALL reads — never loads more than a few KB at a time
+ * (except for individual GPMF data samples which are ~1KB each).
  *
- * Total memory: ~5-20MB regardless of video size.
- *
- * MP4 structure:
- *   ftyp - file type
- *   mdat - media data (huge, we SKIP this)
- *   moov - metadata container
- *     mvhd - movie header (timescale, duration)
- *     trak[] - one per track (video, audio, GPMF metadata)
- *       tkhd - track header
- *       mdia
- *         hdlr - handler (identifies GPMF track)
- *         minf
- *           stbl - sample table
- *             stsd - sample descriptions (codec: 'gpmd')
- *             stsz - sample sizes
- *             stco/co64 - chunk offsets
- *             stsc - sample-to-chunk mapping
+ * Total memory: <10MB regardless of video size (even 11GB+).
  */
 
 type ProgressCallback = (msg: string) => void
 
-// ---- Low-level MP4 reading ----
+// ---- Low-level helpers ----
 
-function readU32(view: DataView, off: number): number {
-  return view.getUint32(off, false) // big-endian
+async function readBytes(file: File, offset: number, length: number): Promise<DataView> {
+  const buf = await file.slice(offset, offset + length).arrayBuffer()
+  return new DataView(buf)
 }
 
-function readStr(view: DataView, off: number, len: number = 4): string {
+function getU32(view: DataView, off: number): number {
+  return view.getUint32(off, false)
+}
+
+function getU64(view: DataView, off: number): number {
+  return getU32(view, off) * 0x100000000 + getU32(view, off + 4)
+}
+
+function getStr(view: DataView, off: number, len: number = 4): string {
   let s = ''
   for (let i = 0; i < len; i++) s += String.fromCharCode(view.getUint8(off + i))
   return s
 }
 
-function readU64(view: DataView, off: number): number {
-  return readU32(view, off) * 0x100000000 + readU32(view, off + 4)
-}
+// ---- Atom header reading (from file, not buffer) ----
 
-// ---- Atom iteration ----
-
-interface Atom {
+interface AtomInfo {
   type: string
-  offset: number  // position in file/buffer
-  size: number    // total atom size including header
-  headerSize: number // 8 or 16
+  fileOffset: number  // position in file
+  dataOffset: number  // where content starts (after header)
+  size: number        // total atom size
+  headerSize: number  // 8 or 16
 }
 
-function parseAtomHeader(view: DataView, off: number, maxLen: number): Atom | null {
-  if (off + 8 > maxLen) return null
-  let size = readU32(view, off)
-  const type = readStr(view, off + 4)
+async function readAtomAt(file: File, fileOffset: number): Promise<AtomInfo | null> {
+  if (fileOffset + 8 > file.size) return null
+  const view = await readBytes(file, fileOffset, 16)
+  let size = getU32(view, 0)
+  const type = getStr(view, 4)
   let headerSize = 8
 
   if (size === 1) {
-    // 64-bit extended size
-    if (off + 16 > maxLen) return null
-    size = readU64(view, off + 8)
+    size = getU64(view, 8)
     headerSize = 16
   } else if (size === 0) {
-    // Atom extends to end of file/container
-    size = maxLen - off
+    size = file.size - fileOffset
   }
 
   if (size < headerSize) return null
-  return { type, offset: off, size, headerSize }
+  return { type, fileOffset, dataOffset: fileOffset + headerSize, size, headerSize }
 }
 
-/** Iterate child atoms within a container atom */
-function* iterateAtoms(view: DataView, start: number, end: number): Generator<Atom> {
+/** Iterate child atoms within a container range in the file */
+async function* iterateFileAtoms(file: File, start: number, end: number): AsyncGenerator<AtomInfo> {
   let pos = start
   while (pos < end - 8) {
-    const atom = parseAtomHeader(view, pos, end)
+    const atom = await readAtomAt(file, pos)
     if (!atom || atom.size < 8) break
     yield atom
     pos += atom.size
   }
 }
 
-// ---- GPMF Track Detection ----
+// ---- GPMF Track info ----
 
 interface GpmfTrackInfo {
   timescale: number
@@ -92,210 +79,8 @@ interface GpmfTrackInfo {
   samplesToChunks: Array<{ firstChunk: number; samplesPerChunk: number }>
 }
 
-/**
- * Parse the moov atom to find the GPMF metadata track and extract its sample table.
- */
-function findGpmfTrack(moovBuf: ArrayBuffer, onProgress?: ProgressCallback): GpmfTrackInfo | null {
-  const view = new DataView(moovBuf)
-  const len = moovBuf.byteLength
+// ---- Main extraction ----
 
-  // Get movie timescale from mvhd
-  let movieTimescale = 1
-
-  for (const atom of iterateAtoms(view, 0, len)) {
-    if (atom.type === 'mvhd') {
-      const version = view.getUint8(atom.offset + atom.headerSize)
-      if (version === 0) {
-        movieTimescale = readU32(view, atom.offset + atom.headerSize + 12)
-      } else {
-        movieTimescale = readU32(view, atom.offset + atom.headerSize + 20)
-      }
-    }
-  }
-
-  // Find trak atoms
-  let trackNum = 0
-  for (const trakAtom of iterateAtoms(view, 0, len)) {
-    if (trakAtom.type !== 'trak') continue
-    trackNum++
-    onProgress?.(`检查轨道 ${trackNum}...`)
-
-    const trakStart = trakAtom.offset + trakAtom.headerSize
-    const trakEnd = trakAtom.offset + trakAtom.size
-
-    // Find mdia inside trak
-    for (const mdiaAtom of iterateAtoms(view, trakStart, trakEnd)) {
-      if (mdiaAtom.type !== 'mdia') continue
-
-      const mdiaStart = mdiaAtom.offset + mdiaAtom.headerSize
-      const mdiaEnd = mdiaAtom.offset + mdiaAtom.size
-
-      // Check hdlr for GPMF handler
-      let isGpmfTrack = false
-      let trackTimescale = movieTimescale
-      let trackDuration = 0
-
-      for (const child of iterateAtoms(view, mdiaStart, mdiaEnd)) {
-        if (child.type === 'hdlr') {
-          // hdlr: version(4) + handler_type(4)
-          const handlerType = readStr(view, child.offset + child.headerSize + 8)
-          // GoPro metadata handler is typically 'meta' or 'tmcd'
-          // But we also check stsd for 'gpmd' codec below
-          if (handlerType === 'meta' || handlerType === 'tmcd') {
-            isGpmfTrack = true
-          }
-          // Check component name for "GoPro" (some firmwares use 'camm' handler)
-          const nameStart = child.offset + child.headerSize + 24
-          if (nameStart + 5 < child.offset + child.size) {
-            const name = readStr(view, nameStart, Math.min(20, child.offset + child.size - nameStart))
-            if (name.includes('GoPro') || name.includes('gpmd')) {
-              isGpmfTrack = true
-            }
-          }
-        }
-        if (child.type === 'mdhd') {
-          const ver = view.getUint8(child.offset + child.headerSize)
-          if (ver === 0) {
-            trackTimescale = readU32(view, child.offset + child.headerSize + 12)
-            trackDuration = readU32(view, child.offset + child.headerSize + 16)
-          } else {
-            trackTimescale = readU32(view, child.offset + child.headerSize + 20)
-            trackDuration = readU64(view, child.offset + child.headerSize + 24)
-          }
-        }
-      }
-
-      if (!isGpmfTrack) continue
-
-      // Find minf -> stbl
-      for (const minfAtom of iterateAtoms(view, mdiaStart, mdiaEnd)) {
-        if (minfAtom.type !== 'minf') continue
-        const minfStart = minfAtom.offset + minfAtom.headerSize
-        const minfEnd = minfAtom.offset + minfAtom.size
-
-        for (const stblAtom of iterateAtoms(view, minfStart, minfEnd)) {
-          if (stblAtom.type !== 'stbl') continue
-          const stblStart = stblAtom.offset + stblAtom.headerSize
-          const stblEnd = stblAtom.offset + stblAtom.size
-
-          // Verify this is GPMF by checking stsd for 'gpmd' codec
-          let confirmedGpmd = false
-          let sampleSizes: number[] = []
-          let chunkOffsets: number[] = []
-          let samplesToChunks: Array<{ firstChunk: number; samplesPerChunk: number }> = []
-
-          for (const box of iterateAtoms(view, stblStart, stblEnd)) {
-            if (box.type === 'stsd') {
-              // Check codec in first sample entry
-              const entryStart = box.offset + box.headerSize + 8 // skip version+flags + entry_count
-              if (entryStart + 12 < box.offset + box.size) {
-                const codec = readStr(view, entryStart + 4)
-                if (codec === 'gpmd') confirmedGpmd = true
-              }
-            }
-
-            if (box.type === 'stsz') {
-              // Sample size table
-              const off = box.offset + box.headerSize
-              const sampleSize = readU32(view, off + 4) // uniform size (0 = variable)
-              const count = readU32(view, off + 8)
-              onProgress?.(`找到 ${count} 个 GPMF 样本`)
-              if (sampleSize > 0) {
-                sampleSizes = new Array(count).fill(sampleSize)
-              } else {
-                for (let i = 0; i < count; i++) {
-                  sampleSizes.push(readU32(view, off + 12 + i * 4))
-                }
-              }
-            }
-
-            if (box.type === 'stco') {
-              // 32-bit chunk offsets
-              const off = box.offset + box.headerSize
-              const count = readU32(view, off + 4)
-              for (let i = 0; i < count; i++) {
-                chunkOffsets.push(readU32(view, off + 8 + i * 4))
-              }
-            }
-
-            if (box.type === 'co64') {
-              // 64-bit chunk offsets (for files > 4GB)
-              const off = box.offset + box.headerSize
-              const count = readU32(view, off + 4)
-              for (let i = 0; i < count; i++) {
-                chunkOffsets.push(readU64(view, off + 8 + i * 8))
-              }
-            }
-
-            if (box.type === 'stsc') {
-              // Sample-to-chunk mapping
-              const off = box.offset + box.headerSize
-              const count = readU32(view, off + 4)
-              for (let i = 0; i < count; i++) {
-                const base = off + 8 + i * 12
-                samplesToChunks.push({
-                  firstChunk: readU32(view, base) - 1, // convert to 0-based
-                  samplesPerChunk: readU32(view, base + 4),
-                })
-              }
-            }
-          }
-
-          // If we found stsd with gpmd, or handler was meta with sample data, proceed
-          if ((confirmedGpmd || isGpmfTrack) && sampleSizes.length > 0 && chunkOffsets.length > 0) {
-            return {
-              timescale: trackTimescale,
-              duration: trackDuration,
-              sampleSizes,
-              chunkOffsets,
-              samplesToChunks: samplesToChunks.length > 0 ? samplesToChunks : [{ firstChunk: 0, samplesPerChunk: 1 }],
-            }
-          }
-        }
-      }
-    }
-  }
-
-  return null
-}
-
-/**
- * Given the sample table info, compute the file offset for each sample.
- */
-function computeSampleOffsets(info: GpmfTrackInfo): Array<{ offset: number; size: number }> {
-  const { sampleSizes, chunkOffsets, samplesToChunks } = info
-  const result: Array<{ offset: number; size: number }> = []
-
-  // Build per-chunk samples-per-chunk lookup
-  let sampleIdx = 0
-  for (let chunkIdx = 0; chunkIdx < chunkOffsets.length; chunkIdx++) {
-    // Find which stsc entry applies to this chunk
-    let samplesInChunk = 1
-    for (let s = samplesToChunks.length - 1; s >= 0; s--) {
-      if (chunkIdx >= samplesToChunks[s].firstChunk) {
-        samplesInChunk = samplesToChunks[s].samplesPerChunk
-        break
-      }
-    }
-
-    let offset = chunkOffsets[chunkIdx]
-    for (let i = 0; i < samplesInChunk && sampleIdx < sampleSizes.length; i++) {
-      result.push({ offset, size: sampleSizes[sampleIdx] })
-      offset += sampleSizes[sampleIdx]
-      sampleIdx++
-    }
-  }
-
-  return result
-}
-
-// ---- Main export ----
-
-/**
- * Extract raw GPMF data from a GoPro MP4 file of any size.
- * Only reads the moov atom + individual GPMF samples via File.slice().
- * Returns the concatenated raw GPMF buffer + timing info.
- */
 export async function extractGpmfFromFile(
   file: File,
   onProgress?: ProgressCallback,
@@ -308,89 +93,247 @@ export async function extractGpmfFromFile(
   // Step 1: Find moov atom by scanning top-level atoms
   let moovOffset = -1
   let moovSize = 0
-  let pos = 0
 
-  while (pos < fileSize) {
-    const headerBuf = await file.slice(pos, Math.min(pos + 16, fileSize)).arrayBuffer()
-    const hv = new DataView(headerBuf)
-    let atomSize = readU32(hv, 0)
-    const atomType = readStr(hv, 4)
-
-    if (atomSize === 1 && headerBuf.byteLength >= 16) {
-      atomSize = readU64(hv, 8)
-    }
-    if (atomSize < 8) break
-
-    onProgress?.(`扫描: ${atomType} @ ${(pos / 1024 / 1024).toFixed(0)}MB (${(pos / fileSize * 100).toFixed(0)}%)`)
-
-    if (atomType === 'moov') {
-      moovOffset = pos
-      moovSize = atomSize
+  for await (const atom of iterateFileAtoms(file, 0, fileSize)) {
+    onProgress?.(`扫描: ${atom.type} @ ${(atom.fileOffset / 1024 / 1024).toFixed(0)}MB (${(atom.fileOffset / fileSize * 100).toFixed(0)}%)`)
+    if (atom.type === 'moov') {
+      moovOffset = atom.fileOffset
+      moovSize = atom.size
       break
     }
-    pos += atomSize
   }
 
   if (moovOffset < 0) {
     throw new Error('未找到 moov 元数据。文件可能不是有效的 MP4/GoPro 视频。')
   }
 
-  onProgress?.(`找到 moov (${(moovSize / 1024 / 1024).toFixed(1)}MB)，正在读取...`)
+  const moovDataStart = moovOffset + 8
+  const moovEnd = moovOffset + moovSize
 
-  // Step 2: Read the entire moov atom into memory (~2-30MB)
-  const moovBuf = await file.slice(moovOffset + 8, moovOffset + moovSize).arrayBuffer()
+  onProgress?.(`找到 moov (${(moovSize / 1024 / 1024).toFixed(1)}MB)，正在搜索 GPMF 轨道...`)
 
-  onProgress?.('正在解析 GPMF 轨道...')
+  // Step 2: Scan trak atoms inside moov (all via File.slice, no big buffer)
+  let movieTimescale = 1
 
-  // Step 3: Parse moov to find the GPMF track's sample table
-  const trackInfo = findGpmfTrack(moovBuf, onProgress)
-  if (!trackInfo) {
-    throw new Error('未找到 GoPro GPMF 元数据轨道。请确认这是 GoPro 录制的视频。')
+  // Read mvhd for timescale
+  for await (const atom of iterateFileAtoms(file, moovDataStart, moovEnd)) {
+    if (atom.type === 'mvhd') {
+      const mvhdView = await readBytes(file, atom.dataOffset, Math.min(32, atom.size - atom.headerSize))
+      const version = mvhdView.getUint8(0)
+      movieTimescale = version === 0 ? getU32(mvhdView, 12) : getU32(mvhdView, 20)
+      break
+    }
   }
 
-  // Step 4: Compute file offsets for each GPMF sample
-  const sampleLocations = computeSampleOffsets(trackInfo)
-  const totalSampleBytes = sampleLocations.reduce((s, l) => s + l.size, 0)
+  // Find GPMF trak
+  let trackNum = 0
+  for await (const trakAtom of iterateFileAtoms(file, moovDataStart, moovEnd)) {
+    if (trakAtom.type !== 'trak') continue
+    trackNum++
+    onProgress?.(`检查轨道 ${trackNum}...`)
 
-  onProgress?.(`找到 ${sampleLocations.length} 个 GPMF 数据块 (${(totalSampleBytes / 1024).toFixed(0)}KB)，正在读取...`)
+    const trakEnd = trakAtom.fileOffset + trakAtom.size
 
-  // Step 5: Read each sample from the file using File.slice()
-  // Batch reads for efficiency (read in 1MB chunks)
+    // Find mdia inside trak
+    for await (const mdiaAtom of iterateFileAtoms(file, trakAtom.dataOffset, trakEnd)) {
+      if (mdiaAtom.type !== 'mdia') continue
+
+      const mdiaEnd = mdiaAtom.fileOffset + mdiaAtom.size
+      let isGpmfTrack = false
+      let trackTimescale = movieTimescale
+      let trackDuration = 0
+
+      // Check hdlr and mdhd
+      for await (const child of iterateFileAtoms(file, mdiaAtom.dataOffset, mdiaEnd)) {
+        if (child.type === 'hdlr') {
+          const hdlrView = await readBytes(file, child.dataOffset, Math.min(40, child.size - child.headerSize))
+          const handlerType = getStr(hdlrView, 8)
+          if (handlerType === 'meta' || handlerType === 'tmcd') {
+            isGpmfTrack = true
+          }
+          // Check name field for "GoPro"
+          if (child.size - child.headerSize > 24) {
+            const nameView = await readBytes(file, child.dataOffset + 24, Math.min(20, child.size - child.headerSize - 24))
+            const name = getStr(nameView, 0, Math.min(20, nameView.byteLength))
+            if (name.includes('GoPro') || name.includes('gpmd')) {
+              isGpmfTrack = true
+            }
+          }
+        }
+        if (child.type === 'mdhd') {
+          const mdhdView = await readBytes(file, child.dataOffset, Math.min(36, child.size - child.headerSize))
+          const ver = mdhdView.getUint8(0)
+          if (ver === 0) {
+            trackTimescale = getU32(mdhdView, 12)
+            trackDuration = getU32(mdhdView, 16)
+          } else {
+            trackTimescale = getU32(mdhdView, 20)
+            trackDuration = getU64(mdhdView, 24)
+          }
+        }
+      }
+
+      if (!isGpmfTrack) continue
+
+      onProgress?.('找到 GPMF 轨道，正在读取样本表...')
+
+      // Find minf -> stbl
+      for await (const minfAtom of iterateFileAtoms(file, mdiaAtom.dataOffset, mdiaEnd)) {
+        if (minfAtom.type !== 'minf') continue
+
+        for await (const stblAtom of iterateFileAtoms(file, minfAtom.dataOffset, minfAtom.fileOffset + minfAtom.size)) {
+          if (stblAtom.type !== 'stbl') continue
+
+          const stblEnd = stblAtom.fileOffset + stblAtom.size
+          let sampleSizes: number[] = []
+          let chunkOffsets: number[] = []
+          let samplesToChunks: Array<{ firstChunk: number; samplesPerChunk: number }> = []
+
+          for await (const box of iterateFileAtoms(file, stblAtom.dataOffset, stblEnd)) {
+            if (box.type === 'stsz') {
+              // Read sample sizes — may be large, read in chunks
+              const headerView = await readBytes(file, box.dataOffset, 12)
+              const uniformSize = getU32(headerView, 4)
+              const count = getU32(headerView, 8)
+              onProgress?.(`找到 ${count} 个 GPMF 样本`)
+
+              if (uniformSize > 0) {
+                sampleSizes = new Array(count).fill(uniformSize)
+              } else {
+                // Read sample size table in 4KB batches
+                const batchEntries = 1024
+                for (let i = 0; i < count; i += batchEntries) {
+                  const batchCount = Math.min(batchEntries, count - i)
+                  const batchView = await readBytes(file, box.dataOffset + 12 + i * 4, batchCount * 4)
+                  for (let j = 0; j < batchCount; j++) {
+                    sampleSizes.push(getU32(batchView, j * 4))
+                  }
+                }
+              }
+            }
+
+            if (box.type === 'stco') {
+              const headerView = await readBytes(file, box.dataOffset, 8)
+              const count = getU32(headerView, 4)
+              const batchEntries = 1024
+              for (let i = 0; i < count; i += batchEntries) {
+                const batchCount = Math.min(batchEntries, count - i)
+                const batchView = await readBytes(file, box.dataOffset + 8 + i * 4, batchCount * 4)
+                for (let j = 0; j < batchCount; j++) {
+                  chunkOffsets.push(getU32(batchView, j * 4))
+                }
+              }
+            }
+
+            if (box.type === 'co64') {
+              const headerView = await readBytes(file, box.dataOffset, 8)
+              const count = getU32(headerView, 4)
+              const batchEntries = 512
+              for (let i = 0; i < count; i += batchEntries) {
+                const batchCount = Math.min(batchEntries, count - i)
+                const batchView = await readBytes(file, box.dataOffset + 8 + i * 8, batchCount * 8)
+                for (let j = 0; j < batchCount; j++) {
+                  chunkOffsets.push(getU64(batchView, j * 8))
+                }
+              }
+            }
+
+            if (box.type === 'stsc') {
+              const headerView = await readBytes(file, box.dataOffset, 8)
+              const count = getU32(headerView, 4)
+              const dataView = await readBytes(file, box.dataOffset + 8, count * 12)
+              for (let i = 0; i < count; i++) {
+                samplesToChunks.push({
+                  firstChunk: getU32(dataView, i * 12) - 1,
+                  samplesPerChunk: getU32(dataView, i * 12 + 4),
+                })
+              }
+            }
+          }
+
+          if (sampleSizes.length > 0 && chunkOffsets.length > 0) {
+            // Success — compute sample offsets and read GPMF data
+            const trackInfo: GpmfTrackInfo = {
+              timescale: trackTimescale,
+              duration: trackDuration,
+              sampleSizes,
+              chunkOffsets,
+              samplesToChunks: samplesToChunks.length > 0 ? samplesToChunks : [{ firstChunk: 0, samplesPerChunk: 1 }],
+            }
+
+            return await readGpmfSamples(file, trackInfo, onProgress)
+          }
+        }
+      }
+    }
+  }
+
+  throw new Error('未找到 GoPro GPMF 元数据轨道。请确认这是 GoPro 录制的视频。')
+}
+
+/**
+ * Read GPMF samples from file using computed offsets.
+ */
+async function readGpmfSamples(
+  file: File,
+  info: GpmfTrackInfo,
+  onProgress?: ProgressCallback,
+): Promise<{ rawData: ArrayBuffer; timing: { start: Date; duration: number } }> {
+  const { sampleSizes, chunkOffsets, samplesToChunks, timescale, duration } = info
+
+  // Compute file offset for each sample
+  const samples: Array<{ offset: number; size: number }> = []
+  let sampleIdx = 0
+
+  for (let chunkIdx = 0; chunkIdx < chunkOffsets.length; chunkIdx++) {
+    let samplesInChunk = 1
+    for (let s = samplesToChunks.length - 1; s >= 0; s--) {
+      if (chunkIdx >= samplesToChunks[s].firstChunk) {
+        samplesInChunk = samplesToChunks[s].samplesPerChunk
+        break
+      }
+    }
+
+    let offset = chunkOffsets[chunkIdx]
+    for (let i = 0; i < samplesInChunk && sampleIdx < sampleSizes.length; i++) {
+      samples.push({ offset, size: sampleSizes[sampleIdx] })
+      offset += sampleSizes[sampleIdx]
+      sampleIdx++
+    }
+  }
+
+  const totalBytes = samples.reduce((s, l) => s + l.size, 0)
+  onProgress?.(`读取 ${samples.length} 个 GPMF 数据块 (${(totalBytes / 1024).toFixed(0)}KB)...`)
+
+  // Read samples in batches
   const rawParts: Uint8Array[] = []
-  const batchSize = 50 // read 50 samples at a time
-  for (let i = 0; i < sampleLocations.length; i += batchSize) {
-    const batch = sampleLocations.slice(i, i + batchSize)
-    const promises = batch.map(loc =>
-      file.slice(loc.offset, loc.offset + loc.size).arrayBuffer()
-    )
+  const batchSize = 50
+  for (let i = 0; i < samples.length; i += batchSize) {
+    const batch = samples.slice(i, i + batchSize)
+    const promises = batch.map(s => file.slice(s.offset, s.offset + s.size).arrayBuffer())
     const buffers = await Promise.all(promises)
     for (const buf of buffers) {
       rawParts.push(new Uint8Array(buf))
     }
-
-    const progress = Math.min(100, ((i + batch.length) / sampleLocations.length * 100))
-    onProgress?.(`读取 GPMF 数据... ${progress.toFixed(0)}%`)
+    const pct = Math.min(100, ((i + batch.length) / samples.length * 100))
+    onProgress?.(`读取 GPMF 数据... ${pct.toFixed(0)}%`)
   }
 
-  // Step 6: Concatenate all samples
+  // Concatenate
   const totalSize = rawParts.reduce((s, p) => s + p.byteLength, 0)
   const combined = new Uint8Array(totalSize)
-  let offset = 0
+  let off = 0
   for (const part of rawParts) {
-    combined.set(part, offset)
-    offset += part.byteLength
+    combined.set(part, off)
+    off += part.byteLength
   }
 
-  // Compute timing from track timescale
-  const durationSeconds = trackInfo.duration / trackInfo.timescale
+  const durationMs = (duration / timescale) * 1000
 
-  onProgress?.(`GPMF 提取完成 (${(totalSize / 1024).toFixed(0)}KB, ${durationSeconds.toFixed(0)}秒)`)
+  onProgress?.(`GPMF 提取完成 (${(totalSize / 1024).toFixed(0)}KB, ${(durationMs / 1000).toFixed(0)}秒)`)
 
   return {
     rawData: combined.buffer,
-    timing: {
-      start: new Date(0), // will be refined by gopro-telemetry
-      duration: durationSeconds * 1000, // ms
-    },
+    timing: { start: new Date(0), duration: durationMs },
   }
 }
