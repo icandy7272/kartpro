@@ -541,6 +541,44 @@ export default function Layout({ session, aiConfig, onAiConfigChange, onNewSessi
               </div>
             </Card>
 
+            {/* Lap trend — compact bar chart */}
+            {fullAnalysis.lapTrend.laps.length > 0 && (() => {
+              const { laps: trendLaps, trend, peakRange, worstRange } = fullAnalysis.lapTrend
+              const times = trendLaps.map(l => l.time)
+              const minT = Math.min(...times)
+              const maxT = Math.max(...times)
+              const range = maxT - minT || 1
+              const trendLabel = trend === 'improving' ? '持续进步' : trend === 'declining' ? '逐渐下降' : '波动'
+              const trendColor = trend === 'improving' ? 'text-green-400' : trend === 'declining' ? 'text-red-400' : 'text-yellow-400'
+              return (
+                <Card>
+                  <CardHeader title="圈速趋势" extra={<span className={`text-[9px] font-bold ${trendColor}`}>{trendLabel}</span>} />
+                  <div className="p-2">
+                    <div className="text-[9px] text-gray-500 mb-1">最佳: 第{peakRange[0]}-{peakRange[1]}圈 · 最差: 第{worstRange[0]}-{worstRange[1]}圈</div>
+                    <div className="relative h-16">
+                      <div className="absolute inset-0 flex items-end gap-px">
+                        {trendLaps.map((lap) => {
+                          const normalized = (lap.time - minT) / range
+                          const barH = Math.max(8, Math.round((1 - normalized) * 100))
+                          const inPeak = lap.lapNumber >= peakRange[0] && lap.lapNumber <= peakRange[1]
+                          const inWorst = lap.lapNumber >= worstRange[0] && lap.lapNumber <= worstRange[1]
+                          const bg = inPeak ? 'bg-green-500' : inWorst ? 'bg-red-500' : 'bg-purple-500'
+                          return (
+                            <div key={lap.lapNumber} className="flex-1 flex flex-col items-center justify-end h-full" title={`第${lap.lapNumber}圈: ${formatTime(lap.time)}`}>
+                              <div className={`w-full ${bg} rounded-t`} style={{ height: `${barH}%` }} />
+                            </div>
+                          )
+                        })}
+                      </div>
+                    </div>
+                    <div className="flex justify-between text-[8px] text-gray-600 mt-0.5">
+                      {trendLaps.map(l => <span key={l.lapNumber} className="flex-1 text-center">{l.lapNumber}</span>)}
+                    </div>
+                  </div>
+                </Card>
+              )
+            })()}
+
             {/* Corner performance table — full width */}
             <Card span={2} className="overflow-y-auto">
               <CornerTable

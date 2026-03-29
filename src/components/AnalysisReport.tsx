@@ -162,6 +162,82 @@ function ScoreBar({ score }: { score: number }) {
   )
 }
 
+/**
+ * Mini SVG map showing two corner trajectories overlaid for comparison.
+ * Gray = fastest overall lap, Purple = best corner lap.
+ */
+function CornerTrajectoryMap({ bestLine, refLine, bestLapId, refLapId }: {
+  bestLine: Array<[number, number]>
+  refLine: Array<[number, number]>
+  bestLapId: number
+  refLapId: number
+}) {
+  if (bestLine.length < 2 || refLine.length < 2) return null
+
+  // Project GPS coordinates to SVG pixel coordinates
+  const allPoints = [...bestLine, ...refLine]
+  const minLat = Math.min(...allPoints.map(p => p[0]))
+  const maxLat = Math.max(...allPoints.map(p => p[0]))
+  const minLng = Math.min(...allPoints.map(p => p[1]))
+  const maxLng = Math.max(...allPoints.map(p => p[1]))
+
+  const latRange = maxLat - minLat || 0.0001
+  const lngRange = maxLng - minLng || 0.0001
+
+  // Maintain aspect ratio using cosine correction
+  const cosLat = Math.cos(((minLat + maxLat) / 2) * Math.PI / 180)
+  const realWidth = lngRange * cosLat
+  const realHeight = latRange
+
+  const w = 200
+  const h = 120
+  const pad = 10
+
+  // Scale to fit SVG with padding
+  const scaleX = (w - pad * 2) / realWidth
+  const scaleY = (h - pad * 2) / realHeight
+  const scale = Math.min(scaleX, scaleY)
+
+  const cx = (w - realWidth * scale) / 2
+  const cy = (h - realHeight * scale) / 2
+
+  function toSVG(lat: number, lng: number): [number, number] {
+    const x = cx + (lng - minLng) * cosLat * scale
+    const y = cy + (maxLat - lat) * scale // flip Y
+    return [x, y]
+  }
+
+  const refPoints = refLine.map(p => toSVG(p[0], p[1])).map(p => `${p[0]},${p[1]}`).join(' ')
+  const bestPoints = bestLine.map(p => toSVG(p[0], p[1])).map(p => `${p[0]},${p[1]}`).join(' ')
+
+  // Entry/exit markers
+  const refStart = toSVG(refLine[0][0], refLine[0][1])
+  const refEnd = toSVG(refLine[refLine.length - 1][0], refLine[refLine.length - 1][1])
+  const bestStart = toSVG(bestLine[0][0], bestLine[0][1])
+  const bestEnd = toSVG(bestLine[bestLine.length - 1][0], bestLine[bestLine.length - 1][1])
+
+  return (
+    <div className="mt-1.5 mb-1">
+      <svg width={w} height={h} className="bg-gray-900/50 rounded border border-gray-700/30">
+        {/* Reference line (fastest overall lap) — gray */}
+        <polyline points={refPoints} fill="none" stroke="#6b7280" strokeWidth="2.5" opacity="0.6" />
+        {/* Best corner line — purple */}
+        <polyline points={bestPoints} fill="none" stroke="#a78bfa" strokeWidth="2.5" />
+        {/* Entry/exit dots for ref */}
+        <circle cx={refStart[0]} cy={refStart[1]} r="3" fill="#6b7280" />
+        <circle cx={refEnd[0]} cy={refEnd[1]} r="3" fill="#6b7280" />
+        {/* Entry/exit dots for best */}
+        <circle cx={bestStart[0]} cy={bestStart[1]} r="3" fill="#a78bfa" />
+        <circle cx={bestEnd[0]} cy={bestEnd[1]} r="3" fill="#a78bfa" />
+      </svg>
+      <div className="flex items-center gap-3 mt-0.5 text-[9px] text-gray-500">
+        <span className="flex items-center gap-1"><span className="w-3 h-0.5 bg-gray-500 inline-block" /> 第{refLapId}圈(最快圈)</span>
+        <span className="flex items-center gap-1"><span className="w-3 h-0.5 bg-purple-400 inline-block" /> 第{bestLapId}圈(该弯最快)</span>
+      </div>
+    </div>
+  )
+}
+
 export default function AnalysisReport({ analysis }: AnalysisReportProps) {
   const {
     theoreticalBest, cornerPriority, consistency, lapTrend, fastestVsSlowest, brakingPattern,
@@ -220,6 +296,14 @@ export default function AnalysisReport({ analysis }: AnalysisReportProps) {
                 <td className="py-1.5 text-[10px] text-gray-500">
                   <div>{c.reason ?? '—'}</div>
                   {c.lineNote && <div className="text-purple-400/70 mt-0.5">走线: {c.lineNote}</div>}
+                  {c.bestLine && c.refLine && c.bestLap !== fastestVsSlowest.fastestLap && (
+                    <CornerTrajectoryMap
+                      bestLine={c.bestLine}
+                      refLine={c.refLine}
+                      bestLapId={c.bestLap}
+                      refLapId={fastestVsSlowest.fastestLap}
+                    />
+                  )}
                 </td>
               </tr>
             ))}

@@ -11,6 +11,8 @@ export interface FullAnalysis {
       refEntry: number; refMin: number; refExit: number // speeds of fastest overall lap
       bestDistance: number; refDistance: number // actual GPS distance through corner (meters)
       lineNote?: string // racing line difference based on actual trajectory data
+      bestLine?: Array<[number, number]> // GPS trajectory [lat, lng][] of best corner lap
+      refLine?: Array<[number, number]>  // GPS trajectory [lat, lng][] of fastest overall lap
     }[]
   }
   cornerPriority: {
@@ -212,11 +214,8 @@ export function generateFullAnalysis(
     if (bestLapId === fastestLap.id) {
       reasons.push('最快圈本身最快')
     } else {
-      // Speed facts (all measured, no guessing)
-      const speedFacts: string[] = []
-      if (Math.abs(entryDiff) > 0.8) speedFacts.push(`入弯${entryDiff > 0 ? '+' : ''}${entryDiff.toFixed(1)}km/h`)
-      if (Math.abs(minDiff) > 0.8) speedFacts.push(`弯心${minDiff > 0 ? '+' : ''}${minDiff.toFixed(1)}km/h`)
-      if (Math.abs(exitDiff) > 0.8) speedFacts.push(`出弯${exitDiff > 0 ? '+' : ''}${exitDiff.toFixed(1)}km/h`)
+      // ALL speed differences (no threshold filtering — show complete picture)
+      const allSpeeds = `入弯${entryDiff >= 0 ? '+' : ''}${entryDiff.toFixed(1)}，弯心${minDiff >= 0 ? '+' : ''}${minDiff.toFixed(1)}，出弯${exitDiff >= 0 ? '+' : ''}${exitDiff.toFixed(1)}km/h`
 
       // Distance fact (measured from GPS)
       const distFact = shorterLine
@@ -225,20 +224,37 @@ export function generateFullAnalysis(
           ? `走线长${distDiff.toFixed(1)}m（+${distPct.toFixed(1)}%）`
           : `走线距离相近`
 
-      // Combine speed + distance into a coherent explanation
-      const avgSpeedDiff = (entryDiff + minDiff + exitDiff) / 3
-      if (avgSpeedDiff > 0.5 && !longerLine) {
-        // Faster speed + same/shorter line → pure speed advantage
-        reasons.push(`速度更高（${speedFacts.join('，')}），${distFact}`)
-      } else if (avgSpeedDiff < -0.5 && shorterLine) {
-        // Slower speed but shorter line → distance advantage
-        reasons.push(`${distFact}，虽然速度偏低（${speedFacts.join('，')}），但距离优势大于速度劣势`)
+      // Time saved
+      const timeSaved = fastestCornerTime - bestTime
+
+      // Compute time contribution from speed vs distance
+      // avgSpeed * time = distance → time = distance / avgSpeed
+      const bestAvgSpeed = (bestEntry + bestMin + bestExit) / 3
+      const refAvgSpeed = (refEntry + refMin + refExit) / 3
+
+      if (longerLine && exitDiff < -0.5) {
+        // Paradox case: longer line + slower exit, but still faster
+        // Must explain what compensated
+        const fasterPhases: string[] = []
+        if (entryDiff > 0.3) fasterPhases.push(`入弯快${entryDiff.toFixed(1)}`)
+        if (minDiff > 0.3) fasterPhases.push(`弯心快${minDiff.toFixed(1)}`)
+        const slowerPhases: string[] = []
+        if (entryDiff < -0.3) slowerPhases.push(`入弯慢${Math.abs(entryDiff).toFixed(1)}`)
+        if (minDiff < -0.3) slowerPhases.push(`弯心慢${Math.abs(minDiff).toFixed(1)}`)
+        if (exitDiff < -0.3) slowerPhases.push(`出弯慢${Math.abs(exitDiff).toFixed(1)}`)
+
+        if (fasterPhases.length > 0) {
+          reasons.push(`虽然${distFact}且${slowerPhases.join('、')}km/h，但${fasterPhases.join('、')}km/h的优势更大，净省${timeSaved.toFixed(3)}s`)
+        } else {
+          // All phases slower or similar but line is longer — timing/rhythm advantage
+          reasons.push(`${distFact}，速度（${allSpeeds}）整体略低，但弯道内节奏和走线角度更优，净省${timeSaved.toFixed(3)}s`)
+        }
       } else if (shorterLine) {
-        reasons.push(`${distFact}${speedFacts.length > 0 ? `，速度差异：${speedFacts.join('，')}` : ''}`)
-      } else if (speedFacts.length > 0) {
-        reasons.push(`${speedFacts.join('，')}，${distFact}`)
+        reasons.push(`${distFact}，速度：${allSpeeds}`)
+      } else if (bestAvgSpeed > refAvgSpeed + 0.5) {
+        reasons.push(`速度更高（${allSpeeds}），${distFact}`)
       } else {
-        reasons.push(`速度和距离差异均<1km/h和0.3m，时间节省来自更精准的走线节奏`)
+        reasons.push(`速度：${allSpeeds}，${distFact}`)
       }
 
       // Line note: measured trajectory facts
@@ -262,6 +278,16 @@ export function generateFullAnalysis(
       lineNote = lineParts.join('；')
     }
 
+    // Extract GPS trajectory coordinates for SVG rendering
+    const bestLine: Array<[number, number]> | undefined =
+      bestLapObj && bestCorner
+        ? bestLapObj.points.slice(bestCorner.startIndex, bestCorner.endIndex + 1).map(p => [p.lat, p.lng])
+        : undefined
+    const refLine: Array<[number, number]> | undefined =
+      refCorner
+        ? fastestLap.points.slice(refCorner.startIndex, refCorner.endIndex + 1).map(p => [p.lat, p.lng])
+        : undefined
+
     perCornerBest.push({
       corner: corners[ci].name,
       bestTime,
@@ -273,6 +299,8 @@ export function generateFullAnalysis(
       bestDistance: bestDist,
       refDistance: refDist,
       lineNote,
+      bestLine,
+      refLine,
     })
   }
 
