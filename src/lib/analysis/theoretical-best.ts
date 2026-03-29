@@ -57,7 +57,15 @@ export function calculateTheoreticalBest(
     bestSectors.push(best === Infinity ? 0 : best)
   }
 
-  const totalTime = bestSectors.reduce((a, b) => a + b, 0)
+  // Best remaining time (last entry → finish line)
+  let bestRemaining = Infinity
+  for (const analysis of compatible) {
+    const r = analysis.remainingTime ?? 0
+    if (r > 0 && r < bestRemaining) bestRemaining = r
+  }
+  if (bestRemaining === Infinity) bestRemaining = 0
+
+  const totalTime = bestSectors.reduce((a, b) => a + b, 0) + bestRemaining
 
   return { time: totalTime, sectors: bestSectors }
 }

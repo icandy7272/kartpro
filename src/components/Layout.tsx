@@ -75,13 +75,18 @@ function reanalyzeLap(lap: Lap, corners: Corner[], refPoints: GPSPoint[]): LapAn
   })
   for (let i = 0; i < lapCorners.length; i++) {
     const lapPoints = lap.points
-    const sectorStart = i === 0 ? 0 : lapCorners[i - 1].endIndex
-    const sectorEnd = lapCorners[i].endIndex
+    const sectorStart = i === 0 ? 0 : lapCorners[i - 1].startIndex
+    const sectorEnd = lapCorners[i].startIndex
     if (sectorStart < lapPoints.length && sectorEnd < lapPoints.length) {
       lapCorners[i].duration = (lapPoints[sectorEnd].time - lapPoints[sectorStart].time) / 1000
     }
   }
-  return { lap, corners: lapCorners, sectorTimes: lapCorners.map((c) => c.duration) }
+  const lastCorner = lapCorners[lapCorners.length - 1]
+  const lastStartIdx = lastCorner ? lastCorner.startIndex : 0
+  const remainingTime = lastStartIdx < lap.points.length
+    ? (lap.points[lap.points.length - 1].time - lap.points[lastStartIdx].time) / 1000
+    : 0
+  return { lap, corners: lapCorners, sectorTimes: lapCorners.map((c) => c.duration), remainingTime }
 }
 
 // Card wrapper component

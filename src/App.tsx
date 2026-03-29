@@ -171,10 +171,11 @@ function findCrossingTime(
 function analyzeLap(lap: Lap, corners: Corner[], refPoints: GPSPoint[]): LapAnalysis {
   const lapPoints = lap.points
 
-  // Step 1: Create apex reference lines from the reference (fastest) lap
-  const apexRefLines = corners.map((c) => {
-    const apexIdx = Math.min(c.apexIndex ?? Math.floor((c.startIndex + c.endIndex) / 2), refPoints.length - 2)
-    return createApexReferenceLine(refPoints, apexIdx)
+  // Step 1: Create entry-point reference lines from the reference (fastest) lap
+  // Fixed geographic split points at each corner's entry position
+  const entryRefLines = corners.map((c) => {
+    const entryIdx = Math.min(c.startIndex, refPoints.length - 2)
+    return createApexReferenceLine(refPoints, entryIdx)
   })
 
   // Step 2: For each corner, find the matching position in this lap and get speeds
@@ -215,34 +216,41 @@ function analyzeLap(lap: Lap, corners: Corner[], refPoints: GPSPoint[]): LapAnal
     }
   })
 
-  // Step 3: Calculate sector durations using apex reference line crossing interpolation
-  // Find interpolated apex crossing times for each corner
-  const apexTimes: (number | null)[] = lapCorners.map((c, ci) => {
-    const searchCenter = Math.floor((c.startIndex + c.endIndex) / 2)
-    return findCrossingTime(lapPoints, apexRefLines[ci], searchCenter)
+  // Step 3: Calculate sector durations using entry-point reference line crossing
+  // Find interpolated entry crossing times for each corner
+  const entryTimes: (number | null)[] = lapCorners.map((c, ci) => {
+    const searchCenter = c.startIndex
+    return findCrossingTime(lapPoints, entryRefLines[ci], searchCenter)
   })
 
-  // Sector time = from this apex to next apex (or lap end for last corner, lap start for first)
+  // Sector time: entry[i-1] → entry[i], covering one corner + preceding straight
+  // sector[0] = lap start → entry[0]
+  // sector[i] = entry[i-1] → entry[i]
   for (let i = 0; i < lapCorners.length; i++) {
-    const currentApexTime = apexTimes[i]
-    const prevApexTime = i === 0 ? lap.startTime : apexTimes[i - 1]
+    const currentEntryTime = entryTimes[i]
+    const prevEntryTime = i === 0 ? lap.startTime : entryTimes[i - 1]
 
-    if (currentApexTime !== null && prevApexTime !== null) {
-      // Duration = from previous apex (or lap start) to current apex
-      lapCorners[i].duration = (currentApexTime - prevApexTime) / 1000
+    if (currentEntryTime !== null && prevEntryTime !== null) {
+      lapCorners[i].duration = (currentEntryTime - prevEntryTime) / 1000
     } else {
       // Fallback to sample-point timing
-      const sectorStart = i === 0 ? 0 : lapCorners[i - 1].endIndex
-      const sectorEnd = lapCorners[i].endIndex
+      const sectorStart = i === 0 ? 0 : lapCorners[i - 1].startIndex
+      const sectorEnd = lapCorners[i].startIndex
       if (sectorStart < lapPoints.length && sectorEnd < lapPoints.length) {
         lapCorners[i].duration = (lapPoints[sectorEnd].time - lapPoints[sectorStart].time) / 1000
       }
     }
   }
 
+  // Remaining time: last entry ref line → lap end (final straight + last corner)
+  const lastEntryTime = entryTimes[entryTimes.length - 1]
+  const remainingTime = lastEntryTime !== null
+    ? (lap.endTime - lastEntryTime) / 1000
+    : 0
+
   const sectorTimes = lapCorners.map((c) => c.duration)
 
-  return { lap, corners: lapCorners, sectorTimes }
+  return { lap, corners: lapCorners, sectorTimes, remainingTime }
 }
 
 type ProcessingStage = 'idle' | 'parsing' | 'smoothing' | 'detecting-sf' | 'picking-sf' | 'detecting-laps' | 'detecting-corners' | 'analyzing' | 'done'
