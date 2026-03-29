@@ -11,7 +11,15 @@ type ProgressCallback = (msg: string) => void
 
 // ---- Low-level helpers ----
 
+const MAX_READ = 10 * 1024 * 1024 // 10MB safety limit per read
+
 async function readBytes(file: File, offset: number, length: number): Promise<DataView> {
+  if (length > MAX_READ) {
+    throw new Error(`读取请求过大: ${(length / 1024 / 1024).toFixed(1)}MB @ offset ${offset}. 可能是文件结构异常。`)
+  }
+  if (offset < 0 || offset + length > file.size) {
+    throw new Error(`读取越界: offset=${offset}, length=${length}, fileSize=${file.size}`)
+  }
   const buf = await file.slice(offset, offset + length).arrayBuffer()
   return new DataView(buf)
 }
@@ -185,16 +193,40 @@ export async function extractGpmfFromFile(
           if (stblAtom.type !== 'stbl') continue
 
           const stblEnd = stblAtom.fileOffset + stblAtom.size
+
+          // FIRST: check stsd for 'gpmd' codec before reading anything else
+          let confirmedGpmd = false
+          for await (const box of iterateFileAtoms(file, stblAtom.dataOffset, stblEnd)) {
+            if (box.type === 'stsd') {
+              const stsdView = await readBytes(file, box.dataOffset, Math.min(20, box.size - box.headerSize))
+              if (stsdView.byteLength >= 12) {
+                const codec = getStr(stsdView, 12)
+                if (codec === 'gpmd') confirmedGpmd = true
+              }
+              break
+            }
+          }
+
+          if (!confirmedGpmd) {
+            onProgress?.(`轨道 ${trackNum} 不是 GPMF (codec != gpmd)，跳过`)
+            continue
+          }
+
+          onProgress?.(`轨道 ${trackNum} 确认为 GPMF (gpmd)，读取样本表...`)
+
           let sampleSizes: number[] = []
           let chunkOffsets: number[] = []
           let samplesToChunks: Array<{ firstChunk: number; samplesPerChunk: number }> = []
 
           for await (const box of iterateFileAtoms(file, stblAtom.dataOffset, stblEnd)) {
             if (box.type === 'stsz') {
-              // Read sample sizes — may be large, read in chunks
               const headerView = await readBytes(file, box.dataOffset, 12)
               const uniformSize = getU32(headerView, 4)
               const count = getU32(headerView, 8)
+              if (count > 500000) {
+                onProgress?.(`样本数量异常 (${count})，跳过...`)
+                break
+              }
               onProgress?.(`找到 ${count} 个 GPMF 样本`)
 
               if (uniformSize > 0) {
@@ -241,12 +273,17 @@ export async function extractGpmfFromFile(
             if (box.type === 'stsc') {
               const headerView = await readBytes(file, box.dataOffset, 8)
               const count = getU32(headerView, 4)
-              const dataView = await readBytes(file, box.dataOffset + 8, count * 12)
-              for (let i = 0; i < count; i++) {
-                samplesToChunks.push({
-                  firstChunk: getU32(dataView, i * 12) - 1,
-                  samplesPerChunk: getU32(dataView, i * 12 + 4),
-                })
+              if (count > 100000) continue // sanity check
+              const batchEntries = 1024
+              for (let i = 0; i < count; i += batchEntries) {
+                const batchCount = Math.min(batchEntries, count - i)
+                const batchView = await readBytes(file, box.dataOffset + 8 + i * 12, batchCount * 12)
+                for (let j = 0; j < batchCount; j++) {
+                  samplesToChunks.push({
+                    firstChunk: getU32(batchView, j * 12) - 1,
+                    samplesPerChunk: getU32(batchView, j * 12 + 4),
+                  })
+                }
               }
             }
           }
@@ -303,6 +340,22 @@ async function readGpmfSamples(
   }
 
   const totalBytes = samples.reduce((s, l) => s + l.size, 0)
+
+  // Safety check: GPMF data should be <200MB for any reasonable recording
+  if (totalBytes > 200 * 1024 * 1024) {
+    throw new Error(`GPMF 数据异常大 (${(totalBytes / 1024 / 1024).toFixed(0)}MB)，可能是文件结构解析错误。`)
+  }
+
+  // Sanity check individual sample sizes
+  for (const s of samples) {
+    if (s.size > 1024 * 1024) { // single sample > 1MB is suspicious
+      throw new Error(`GPMF 样本大小异常 (${(s.size / 1024).toFixed(0)}KB @ offset ${s.offset})，可能是文件结构解析错误。`)
+    }
+    if (s.offset + s.size > file.size) {
+      throw new Error(`GPMF 样本偏移越界 (offset=${s.offset}, size=${s.size}, fileSize=${file.size})`)
+    }
+  }
+
   onProgress?.(`读取 ${samples.length} 个 GPMF 数据块 (${(totalBytes / 1024).toFixed(0)}KB)...`)
 
   // Read samples in batches
