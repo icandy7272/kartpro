@@ -163,8 +163,9 @@ export default function ComparisonReport({
   analysis1,
   analysis2,
   corners,
-  onClose,
+  onClose: _onClose,
 }: ComparisonReportProps) {
+  void _onClose // kept in props for Layout compatibility
   const totalDelta = lap1.duration - lap2.duration
   const lap1Faster = totalDelta < 0
   const fasterLabel = lap1Faster ? `圈${lap1.id}` : `圈${lap2.id}`
@@ -391,15 +392,9 @@ export default function ComparisonReport({
 
   return (
     <div className="h-full flex flex-col overflow-hidden bg-gray-900">
-      {/* Header */}
-      <div className="px-4 py-3 border-b border-gray-800 flex items-center justify-between shrink-0">
-        <h2 className="text-sm font-bold text-purple-400">对比分析</h2>
-        <button
-          onClick={onClose}
-          className="px-3 py-1 text-xs bg-gray-800 hover:bg-gray-700 text-gray-300 rounded-lg transition-colors"
-        >
-          返回分析
-        </button>
+      {/* Header — no back button here, Layout already has one */}
+      <div className="px-4 py-3 border-b border-gray-800 shrink-0">
+        <h2 className="text-sm font-bold text-purple-400">对比分析 — 圈{lap1.id} vs 圈{lap2.id}</h2>
       </div>
 
       <div className="flex-1 overflow-y-auto p-4 space-y-3">
@@ -439,7 +434,7 @@ export default function ComparisonReport({
         />
 
         {/* Section c: Speed comparison */}
-        <Section title="速度对比表" icon="⚡">
+        <Section title="速度对比表" icon="⚡" defaultOpen={true}>
           <div className="overflow-x-auto">
             <table className="w-full text-xs">
               <thead>
@@ -502,7 +497,7 @@ export default function ComparisonReport({
         </Section>
 
         {/* Section d: Braking/acceleration pattern */}
-        <Section title="刹车/加速模式对比" icon="🛑">
+        <Section title="刹车/加速模式对比" icon="🛑" defaultOpen={true}>
           <div className="overflow-x-auto">
             <table className="w-full text-xs">
               <thead>
