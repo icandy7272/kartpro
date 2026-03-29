@@ -89,10 +89,10 @@ interface GpmfTrackInfo {
 
 // ---- Main extraction ----
 
-export async function extractGpmfFromFile(
+export async function extractGPSFromVideo(
   file: File,
   onProgress?: ProgressCallback,
-): Promise<{ rawData: ArrayBuffer; timing: { start: Date; duration: number } }> {
+): Promise<GPSPoint[]> {
   const fileSize = file.size
   const sizeMB = fileSize / (1024 * 1024)
 
@@ -289,7 +289,6 @@ export async function extractGpmfFromFile(
           }
 
           if (sampleSizes.length > 0 && chunkOffsets.length > 0) {
-            // Success — compute sample offsets and read GPMF data
             const trackInfo: GpmfTrackInfo = {
               timescale: trackTimescale,
               duration: trackDuration,
@@ -298,7 +297,7 @@ export async function extractGpmfFromFile(
               samplesToChunks: samplesToChunks.length > 0 ? samplesToChunks : [{ firstChunk: 0, samplesPerChunk: 1 }],
             }
 
-            return await readGpmfSamples(file, trackInfo, onProgress)
+            return await readAndParseGpmfSamples(file, trackInfo, onProgress)
           }
         }
       }
@@ -308,20 +307,95 @@ export async function extractGpmfFromFile(
   throw new Error('未找到 GoPro GPMF 元数据轨道。请确认这是 GoPro 录制的视频。')
 }
 
+// ---- GPMF KLV parser ----
+
+interface GPSPoint {
+  lat: number; lng: number; altitude: number; speed: number; time: number
+}
+
 /**
- * Read GPMF samples from file using computed offsets.
+ * Parse GPS data (GPS5 or GPS9) from a single GPMF sample buffer.
  */
-async function readGpmfSamples(
+function parseGPSFromGpmfSample(view: DataView, start: number, end: number): GPSPoint[] {
+  const points: GPSPoint[] = []
+  parseKLV(view, start, end, null, points)
+  return points
+}
+
+function parseKLV(
+  view: DataView, start: number, end: number,
+  currentScale: number[] | null, points: GPSPoint[]
+): void {
+  let pos = start
+  while (pos < end - 8) {
+    const key = getStr(view, pos)
+    const type = view.getUint8(pos + 4)
+    const structSize = view.getUint8(pos + 5)
+    const repeat = view.getUint16(pos + 6, false)
+    const dataSize = structSize * repeat
+    const paddedSize = (dataSize + 3) & ~3
+
+    if (type === 0 && paddedSize > 0) {
+      // Container — recurse
+      parseKLV(view, pos + 8, Math.min(pos + 8 + paddedSize, end), null, points)
+    } else if (key === 'SCAL' && structSize === 4) {
+      currentScale = []
+      for (let i = 0; i < repeat; i++) {
+        currentScale.push(view.getInt32(pos + 8 + i * 4, false))
+      }
+    } else if (key === 'GPS5' && structSize === 20 && currentScale && currentScale.length >= 5) {
+      // GPS5: lat, lng, alt, speed2d, speed3d (5 x int32)
+      const s = currentScale
+      for (let i = 0; i < repeat; i++) {
+        const off = pos + 8 + i * 20
+        if (off + 20 > end) break
+        const lat = view.getInt32(off, false) / s[0]
+        const lng = view.getInt32(off + 4, false) / s[1]
+        const alt = view.getInt32(off + 8, false) / s[2]
+        const speed2d = view.getInt32(off + 12, false) / s[3]
+        if (lat !== 0 && lng !== 0) {
+          points.push({ lat, lng, altitude: alt, speed: speed2d, time: 0 })
+        }
+      }
+    } else if (key === 'GPS9' && structSize === 32 && currentScale && currentScale.length >= 8) {
+      // GPS9: lat, lng, alt, speed2d, speed3d, days, seconds, dop (8 x int32)
+      const s = currentScale
+      const baseDate = new Date(2000, 0, 1).getTime()
+      for (let i = 0; i < repeat; i++) {
+        const off = pos + 8 + i * 32
+        if (off + 32 > end) break
+        const lat = view.getInt32(off, false) / s[0]
+        const lng = view.getInt32(off + 4, false) / s[1]
+        const alt = view.getInt32(off + 8, false) / s[2]
+        const speed2d = view.getInt32(off + 12, false) / s[3]
+        const days = view.getInt32(off + 20, false) / s[5]
+        const secs = view.getInt32(off + 24, false) / s[6]
+        const time = baseDate + days * 86400000 + secs * 1000
+        if (lat !== 0 && lng !== 0) {
+          points.push({ lat, lng, altitude: alt, speed: speed2d, time })
+        }
+      }
+    }
+
+    pos += 8 + paddedSize
+    if (pos > end) break
+  }
+}
+
+/**
+ * Read GPMF samples and parse GPS data directly.
+ * No dependency on gpmf-extract or gopro-telemetry.
+ */
+async function readAndParseGpmfSamples(
   file: File,
   info: GpmfTrackInfo,
   onProgress?: ProgressCallback,
-): Promise<{ rawData: ArrayBuffer; timing: { start: Date; duration: number } }> {
-  const { sampleSizes, chunkOffsets, samplesToChunks, timescale, duration } = info
+): Promise<GPSPoint[]> {
+  const { sampleSizes, chunkOffsets, samplesToChunks } = info
 
   // Compute file offset for each sample
-  const samples: Array<{ offset: number; size: number }> = []
+  const sampleLocs: Array<{ offset: number; size: number }> = []
   let sampleIdx = 0
-
   for (let chunkIdx = 0; chunkIdx < chunkOffsets.length; chunkIdx++) {
     let samplesInChunk = 1
     for (let s = samplesToChunks.length - 1; s >= 0; s--) {
@@ -330,63 +404,42 @@ async function readGpmfSamples(
         break
       }
     }
-
     let offset = chunkOffsets[chunkIdx]
     for (let i = 0; i < samplesInChunk && sampleIdx < sampleSizes.length; i++) {
-      samples.push({ offset, size: sampleSizes[sampleIdx] })
+      sampleLocs.push({ offset, size: sampleSizes[sampleIdx] })
       offset += sampleSizes[sampleIdx]
       sampleIdx++
     }
   }
 
-  const totalBytes = samples.reduce((s, l) => s + l.size, 0)
+  onProgress?.(`读取并解析 ${sampleLocs.length} 个 GPMF 数据块...`)
 
-  // Safety check: GPMF data should be <200MB for any reasonable recording
-  if (totalBytes > 200 * 1024 * 1024) {
-    throw new Error(`GPMF 数据异常大 (${(totalBytes / 1024 / 1024).toFixed(0)}MB)，可能是文件结构解析错误。`)
-  }
+  // Read and parse each sample individually — no concatenation needed
+  const allPoints: GPSPoint[] = []
+  for (let i = 0; i < sampleLocs.length; i++) {
+    const loc = sampleLocs[i]
+    if (loc.size > 1024 * 1024 || loc.offset + loc.size > file.size) continue
 
-  // Sanity check individual sample sizes
-  for (const s of samples) {
-    if (s.size > 1024 * 1024) { // single sample > 1MB is suspicious
-      throw new Error(`GPMF 样本大小异常 (${(s.size / 1024).toFixed(0)}KB @ offset ${s.offset})，可能是文件结构解析错误。`)
+    const buf = await file.slice(loc.offset, loc.offset + loc.size).arrayBuffer()
+    const view = new DataView(buf)
+    const points = parseGPSFromGpmfSample(view, 0, buf.byteLength)
+    allPoints.push(...points)
+
+    if (i % 50 === 0 || i === sampleLocs.length - 1) {
+      onProgress?.(`解析 GPS 数据... ${Math.round((i + 1) / sampleLocs.length * 100)}% (${allPoints.length} 点)`)
     }
-    if (s.offset + s.size > file.size) {
-      throw new Error(`GPMF 样本偏移越界 (offset=${s.offset}, size=${s.size}, fileSize=${file.size})`)
+  }
+
+  // Assign timestamps for GPS5 (which doesn't have per-point timestamps)
+  // Use even spacing based on sample order
+  if (allPoints.length > 0 && allPoints[0].time === 0) {
+    // GPS5 mode: assign timestamps based on sample index
+    const interval = 100 // ~10Hz GPS, 100ms between points
+    for (let i = 0; i < allPoints.length; i++) {
+      allPoints[i].time = i * interval
     }
   }
 
-  onProgress?.(`读取 ${samples.length} 个 GPMF 数据块 (${(totalBytes / 1024).toFixed(0)}KB)...`)
-
-  // Read samples in batches
-  const rawParts: Uint8Array[] = []
-  const batchSize = 50
-  for (let i = 0; i < samples.length; i += batchSize) {
-    const batch = samples.slice(i, i + batchSize)
-    const promises = batch.map(s => file.slice(s.offset, s.offset + s.size).arrayBuffer())
-    const buffers = await Promise.all(promises)
-    for (const buf of buffers) {
-      rawParts.push(new Uint8Array(buf))
-    }
-    const pct = Math.min(100, ((i + batch.length) / samples.length * 100))
-    onProgress?.(`读取 GPMF 数据... ${pct.toFixed(0)}%`)
-  }
-
-  // Concatenate
-  const totalSize = rawParts.reduce((s, p) => s + p.byteLength, 0)
-  const combined = new Uint8Array(totalSize)
-  let off = 0
-  for (const part of rawParts) {
-    combined.set(part, off)
-    off += part.byteLength
-  }
-
-  const durationMs = (duration / timescale) * 1000
-
-  onProgress?.(`GPMF 提取完成 (${(totalSize / 1024).toFixed(0)}KB, ${(durationMs / 1000).toFixed(0)}秒)`)
-
-  return {
-    rawData: combined.buffer,
-    timing: { start: new Date(0), duration: durationMs },
-  }
+  onProgress?.(`GPS 提取完成：${allPoints.length} 个点`)
+  return allPoints
 }

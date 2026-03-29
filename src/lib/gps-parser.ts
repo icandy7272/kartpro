@@ -1,5 +1,4 @@
-import goProTelemetry from 'gopro-telemetry'
-import { extractGpmfFromFile } from './gpmf-stream-extractor'
+import { extractGPSFromVideo } from './gpmf-stream-extractor'
 import type { GPSPoint } from '../types'
 
 function haversineDistance(lat1: number, lng1: number, lat2: number, lng2: number): number {
@@ -128,62 +127,19 @@ export async function parseGeoJSONFile(file: File): Promise<GPSPoint[]> {
 /**
  * Extract GPS from a video file using smart streaming extraction.
  * Works with ANY file size (4GB, 8GB, 11GB+) without loading the video into memory.
- * Only reads the MP4 metadata track (~5-20MB) via File.slice().
+ * Supports both GPS5 (older GoPro) and GPS9 (Hero 12/13+) formats.
+ * No dependency on gpmf-extract or gopro-telemetry.
  */
 export async function parseGPSFromFile(
   file: File,
   onProgress?: (msg: string) => void,
 ): Promise<GPSPoint[]> {
-  // Step 1: Extract raw GPMF data using streaming MP4 parser
-  const extracted = await extractGpmfFromFile(file, onProgress)
-
-  onProgress?.('正在转换 GPS 坐标...')
-
-  // Step 2: Pass raw GPMF data to gopro-telemetry for GPS parsing
-  let telemetry: Record<string, unknown>
-  try {
-    telemetry = await (goProTelemetry as any)(
-      { rawData: extracted.rawData, timing: extracted.timing },
-      { stream: ['GPS5'], smooth: 3, GPS: { fix: 2 } },
-    ) as Record<string, unknown>
-  } catch (err) {
-    throw new Error(
-      `GPS 数据转换失败: ${err instanceof Error ? err.message : String(err)}`
-    )
-  }
-
-  const points: GPSPoint[] = []
-
-  for (const deviceKey of Object.keys(telemetry)) {
-    const device = telemetry[deviceKey] as Record<string, unknown>
-    if (!device || typeof device !== 'object') continue
-
-    const streams = device.streams as Record<string, unknown> | undefined
-    if (!streams) continue
-
-    const gps5 = streams['GPS5'] as { samples?: Array<Record<string, unknown>> } | undefined
-    if (!gps5?.samples) continue
-
-    for (const sample of gps5.samples) {
-      const value = sample.value as number[] | undefined
-      const date = sample.date as string | undefined
-      if (!value || value.length < 5 || !date) continue
-
-      const [lat, lng, altitude, speed2d] = value
-      const time = new Date(date).getTime()
-
-      if (isNaN(lat) || isNaN(lng) || isNaN(time)) continue
-
-      points.push({ lat, lng, speed: speed2d, time, altitude })
-    }
-  }
+  const points = await extractGPSFromVideo(file, onProgress)
 
   if (points.length === 0) {
     throw new Error('视频中未找到 GPS 数据。请确认拍摄时已开启 GoPro GPS 功能。')
   }
 
   points.sort((a, b) => a.time - b.time)
-  onProgress?.(`成功提取 ${points.length} 个 GPS 点`)
-
   return points
 }
