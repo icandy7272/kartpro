@@ -108,6 +108,38 @@ export default function CornerTable({ analyses, selectedLapIds, fastestLapId }: 
               })}
             </tr>
           ))}
+          {/* Remaining sector: last entry ref line → finish line */}
+          <tr className="border-b border-gray-800/30 hover:bg-gray-800/30">
+            <td className="py-1.5 px-2 font-medium text-gray-500 whitespace-nowrap italic">
+              直道
+            </td>
+            {selected.map((analysis) => {
+              const remaining = analysis.remainingTime ?? 0
+              const bestRemaining = fastestAnalysis?.remainingTime ?? 0
+              const delta = remaining - bestRemaining
+              const deltaColor =
+                Math.abs(delta) < 0.01
+                  ? 'text-gray-500'
+                  : delta < 0
+                  ? 'text-green-400'
+                  : 'text-red-400'
+
+              return (
+                <td key={analysis.lap.id} colSpan={4} className="py-1.5">
+                  <div className="flex text-[11px] font-mono">
+                    <span className="flex-1 px-1 text-gray-600">--</span>
+                    <span className="flex-1 px-1 text-gray-600">--</span>
+                    <span className="flex-1 px-1 text-gray-600">--</span>
+                    <span className={`flex-1 px-1 ${deltaColor}`}>
+                      {analysis.lap.id === fastestLapId
+                        ? '--'
+                        : `${delta >= 0 ? '+' : ''}${delta.toFixed(2)}`}
+                    </span>
+                  </div>
+                </td>
+              )
+            })}
+          </tr>
         </tbody>
       </table>
     </div>

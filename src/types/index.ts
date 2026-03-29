@@ -38,6 +38,7 @@ export interface LapAnalysis {
   lap: Lap
   corners: Corner[]
   sectorTimes: number[] // time per corner segment
+  remainingTime: number // time from last entry ref line to lap end
 }
 
 export interface TrainingSession {
