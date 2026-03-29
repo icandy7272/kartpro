@@ -104,20 +104,6 @@ function Section({
   )
 }
 
-function RatingBadge({ rating }: { rating: string }) {
-  const colorMap: Record<string, string> = {
-    '非常稳定': 'bg-green-500/20 text-green-400 border-green-500/30',
-    '稳定': 'bg-blue-500/20 text-blue-400 border-blue-500/30',
-    '波动': 'bg-yellow-500/20 text-yellow-400 border-yellow-500/30',
-    '不稳定': 'bg-red-500/20 text-red-400 border-red-500/30',
-  }
-  const cls = colorMap[rating] || 'bg-gray-500/20 text-gray-400 border-gray-500/30'
-  return (
-    <span className={`text-[10px] px-1.5 py-0.5 rounded border ${cls}`}>
-      {rating}
-    </span>
-  )
-}
 
 function DiagnosisBadge({ diagnosis }: { diagnosis: string }) {
   const colorMap: Record<string, string> = {
@@ -258,7 +244,7 @@ function CornerTrajectoryMap({ bestLine, refLine, bestLapId, refLapId, bestSpeed
 
 export default function AnalysisReport({ analysis }: AnalysisReportProps) {
   const {
-    theoreticalBest, consistency, lapTrend, fastestVsSlowest, brakingPattern,
+    theoreticalBest, fastestVsSlowest, brakingPattern,
     lapGroups, cornerCorrelation, trainingPlan, cornerScoring, cornerNarrative,
   } = analysis
 
@@ -268,10 +254,6 @@ export default function AnalysisReport({ analysis }: AnalysisReportProps) {
 
 
   // Lap trend visualization helpers
-  const lapTimes = lapTrend.laps.map((l) => l.time)
-  const minLapTime = Math.min(...lapTimes)
-  const maxLapTime = Math.max(...lapTimes)
-  const lapTimeRange = maxLapTime - minLapTime || 1
 
   return (
     <div className="space-y-2">
@@ -332,95 +314,7 @@ export default function AnalysisReport({ analysis }: AnalysisReportProps) {
 
       {/* Corner Priority removed — already shown in dashboard card */}
 
-      {/* 3. Consistency */}
-      <Section title="一致性诊断" icon="📊" tip="衡量每个弯道在不同圈次中的表现波动。标准差越小越稳定，说明该弯道技术越成熟。" defaultOpen>
-        <table className="w-full text-xs border-collapse">
-          <thead>
-            <tr className="text-gray-500 border-b border-gray-700">
-              <th className="text-left py-1 pr-2">弯道</th>
-              <th className="text-right py-1 pr-2"><span className="inline-flex items-center justify-end">标准差<InfoTip text="数值越小表示该弯道表现越稳定。<0.1s=非常稳定，<0.2s=稳定，<0.4s=波动，≥0.4s=不稳定" /></span></th>
-              <th className="text-center py-1 pr-2">评级</th>
-              <th className="text-right py-1 pr-2">最快偏差</th>
-              <th className="text-right py-1">最慢偏差</th>
-            </tr>
-          </thead>
-          <tbody>
-            {consistency.map((c) => (
-              <tr key={c.corner} className="border-b border-gray-800/50 text-gray-400">
-                <td className="py-1 pr-2 font-medium text-gray-300">{c.corner}</td>
-                <td className="text-right py-1 pr-2">{c.stdDev.toFixed(3)}s</td>
-                <td className="text-center py-1 pr-2">
-                  <RatingBadge rating={c.rating} />
-                </td>
-                <td className="text-right py-1 pr-2 text-green-400">
-                  {c.minDelta.toFixed(3)}s <span className="text-gray-600 text-[10px]">L{c.minLap}</span>
-                </td>
-                <td className="text-right py-1 text-red-400">
-                  +{c.maxDelta.toFixed(3)}s <span className="text-gray-600 text-[10px]">L{c.maxLap}</span>
-                </td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      </Section>
-
-      {/* 4. Lap Trend */}
-      <Section title="圈速趋势" defaultOpen icon="📈" tip="显示整个训练中圈速的变化规律，帮助识别体力衰退、轮胎衰减或注意力波动。">
-        <div className="mb-2 flex items-center gap-2 text-xs">
-          <span className="text-gray-500">趋势:</span>
-          <span
-            className={
-              lapTrend.trend === 'improving'
-                ? 'text-green-400 font-bold'
-                : lapTrend.trend === 'declining'
-                  ? 'text-red-400 font-bold'
-                  : 'text-yellow-400 font-bold'
-            }
-          >
-            {lapTrend.trend === 'improving' ? '持续进步' : lapTrend.trend === 'declining' ? '逐渐下降' : '波动'}
-          </span>
-          <span className="text-gray-600">|</span>
-          <span className="text-gray-500">
-            最佳区间: 第{lapTrend.peakRange[0]}-{lapTrend.peakRange[1]}圈
-          </span>
-          <span className="text-gray-600">|</span>
-          <span className="text-gray-500">
-            最差区间: 第{lapTrend.worstRange[0]}-{lapTrend.worstRange[1]}圈
-          </span>
-        </div>
-        <div className="relative h-24">
-          <div className="absolute inset-0 flex items-end gap-[2px]">
-            {lapTrend.laps.map((lap) => {
-              // Invert: fastest lap = tallest bar
-              const normalized = lapTimeRange > 0 ? (lap.time - minLapTime) / lapTimeRange : 0
-              const barHeight = Math.max(10, Math.round((1 - normalized) * 100))
-              const inPeak =
-                lap.lapNumber >= lapTrend.peakRange[0] && lap.lapNumber <= lapTrend.peakRange[1]
-              const inWorst =
-                lap.lapNumber >= lapTrend.worstRange[0] && lap.lapNumber <= lapTrend.worstRange[1]
-              const bgColor = inPeak
-                ? 'bg-green-500'
-                : inWorst
-                  ? 'bg-red-500'
-                  : 'bg-purple-500'
-              return (
-                <div key={lap.lapNumber} className="flex-1 flex flex-col items-center justify-end h-full">
-                  <div
-                    className={`w-full ${bgColor} rounded-t`}
-                    style={{ height: `${barHeight}%` }}
-                    title={`第${lap.lapNumber}圈: ${formatTime(lap.time)} (+${lap.delta.toFixed(3)}s)`}
-                  />
-                </div>
-              )
-            })}
-          </div>
-        </div>
-        <div className="flex justify-between text-[8px] text-gray-600 mt-0.5">
-          {lapTrend.laps.map((lap) => (
-            <span key={lap.lapNumber} className="flex-1 text-center">{lap.lapNumber}</span>
-          ))}
-        </div>
-      </Section>
+      {/* Consistency + Lap Trend removed — already shown in dashboard cards */}
 
       {/* 5. Fastest vs Slowest */}
       <Section title="最快 vs 最慢圈" defaultOpen icon="⚡" tip="对比最快圈和最慢圈在每个弯道的耗时差异，找出最慢圈掉时最多的弯道。">
