@@ -1,4 +1,13 @@
 import { useState, useCallback, useEffect } from 'react'
+
+// Polyfill for HTTP environments where crypto.randomUUID is unavailable
+function generateId(): string {
+  if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') return crypto.randomUUID()
+  return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, (c) => {
+    const r = (Math.random() * 16) | 0
+    return (c === 'x' ? r : (r & 0x3) | 0x8).toString(16)
+  })
+}
 import type { TrainingSession, AIConfig, LapAnalysis, Lap, Corner, GPSPoint, TrackProfile } from './types'
 import { parseGPSFromFile, parseGeoJSONFile } from './lib/gps-parser'
 import { parseVBO } from './lib/vbo-parser'
@@ -433,7 +442,7 @@ function App() {
           const analyses: LapAnalysis[] = laps.map((lap) => analyzeLap(lap, corners, fastestLap.points))
 
           const session: TrainingSession = {
-            id: crypto.randomUUID(),
+            id: generateId(),
             filename: file.name,
             date: new Date(laps[0].startTime),
             laps,
@@ -459,7 +468,7 @@ function App() {
           }))
           const now = Date.now()
           saveTrackProfile({
-            id: profile?.id ?? crypto.randomUUID(),
+            id: profile?.id ?? generateId(),
             name: profile?.name ?? file.name.replace(/\.[^.]+$/, ''),
             centerLat: center.lat,
             centerLng: center.lng,
@@ -507,7 +516,7 @@ function App() {
       const analyses: LapAnalysis[] = data.laps.map((lap) => analyzeLap(lap, data.corners, fastestLap.points))
 
       const session: TrainingSession = {
-        id: crypto.randomUUID(),
+        id: generateId(),
         filename: currentFilename,
         date: new Date(data.laps[0].startTime),
         laps: data.laps,
@@ -532,7 +541,7 @@ function App() {
       }))
       const now = Date.now()
       saveTrackProfile({
-        id: matchedProfile?.id ?? crypto.randomUUID(),
+        id: matchedProfile?.id ?? generateId(),
         name: data.trackName ?? matchedProfile?.name ?? currentFilename.replace(/\.[^.]+$/, ''),
         centerLat: center.lat,
         centerLng: center.lng,

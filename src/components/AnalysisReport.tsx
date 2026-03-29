@@ -258,7 +258,7 @@ function CornerTrajectoryMap({ bestLine, refLine, bestLapId, refLapId, bestSpeed
 
 export default function AnalysisReport({ analysis }: AnalysisReportProps) {
   const {
-    theoreticalBest, cornerPriority, consistency, lapTrend, fastestVsSlowest, brakingPattern,
+    theoreticalBest, consistency, lapTrend, fastestVsSlowest, brakingPattern,
     lapGroups, cornerCorrelation, trainingPlan, cornerScoring, cornerNarrative,
   } = analysis
 
@@ -266,7 +266,6 @@ export default function AnalysisReport({ analysis }: AnalysisReportProps) {
     return null
   }
 
-  const maxPriorityDelta = cornerPriority[0]?.avgDelta || 0.1
 
   // Lap trend visualization helpers
   const lapTimes = lapTrend.laps.map((l) => l.time)
