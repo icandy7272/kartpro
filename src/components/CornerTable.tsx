@@ -57,10 +57,10 @@ export default function CornerTable({ analyses, selectedLapIds, fastestLapId }: 
             {selected.map((a) => (
               <th key={a.lap.id} className="py-1" colSpan={4}>
                 <div className="flex text-[10px]">
-                  <span className="flex-1 px-1">入弯</span>
-                  <span className="flex-1 px-1">最低</span>
-                  <span className="flex-1 px-1">出弯</span>
-                  <span className="flex-1 px-1">差值</span>
+                  <span className="flex-1 px-1">入弯<span className="text-gray-700 ml-0.5">km/h</span></span>
+                  <span className="flex-1 px-1">最低<span className="text-gray-700 ml-0.5">km/h</span></span>
+                  <span className="flex-1 px-1">出弯<span className="text-gray-700 ml-0.5">km/h</span></span>
+                  <span className="flex-1 px-1">差值<span className="text-gray-700 ml-0.5">s</span></span>
                 </div>
               </th>
             ))}
