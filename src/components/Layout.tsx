@@ -414,10 +414,10 @@ export default function Layout({ session, aiConfig, onAiConfigChange, onNewSessi
       )}
 
       {/* Main layout: Left (map + speed chart) | Right (scrollable cards) */}
-      <div className="flex-1 flex overflow-hidden">
+      <div className="flex-1 flex flex-col md:flex-row overflow-hidden">
 
         {/* Left panel — Lap sidebar + Map + Speed Chart */}
-        <div className="w-[45%] flex flex-col shrink-0 border-r border-gray-800">
+        <div className="w-full md:w-[45%] h-[50vh] md:h-auto flex flex-col shrink-0 border-b md:border-b-0 md:border-r border-gray-800">
           {/* Top: Lap sidebar + Map side by side */}
           <div className="flex-1 flex min-h-0">
             {/* Narrow lap sidebar */}

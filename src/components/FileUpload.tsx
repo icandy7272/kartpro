@@ -81,7 +81,7 @@ export default function FileUpload({ onFileSelect, historySessions, onLoadSessio
 
   return (
     <div
-      className="min-h-screen flex items-center justify-center p-8"
+      className="min-h-screen flex flex-col items-center justify-center p-8 gap-8"
       onDragOver={handleDragOver}
       onDragLeave={handleDragLeave}
       onDrop={handleDrop}
