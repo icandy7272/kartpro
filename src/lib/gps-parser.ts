@@ -1,5 +1,5 @@
-import gpmfExtract from 'gpmf-extract'
 import goProTelemetry from 'gopro-telemetry'
+import { extractGpmfFromFile } from './gpmf-stream-extractor'
 import type { GPSPoint } from '../types'
 
 function haversineDistance(lat1: number, lng1: number, lat2: number, lng2: number): number {
@@ -126,124 +126,24 @@ export async function parseGeoJSONFile(file: File): Promise<GPSPoint[]> {
 }
 
 /**
- * Read a 32-bit big-endian unsigned integer from a DataView.
- */
-function readU32(view: DataView, offset: number): number {
-  return view.getUint32(offset, false)
-}
-
-/**
- * Read 4 ASCII characters from a DataView.
- */
-function readType(view: DataView, offset: number): string {
-  return String.fromCharCode(
-    view.getUint8(offset), view.getUint8(offset + 1),
-    view.getUint8(offset + 2), view.getUint8(offset + 3)
-  )
-}
-
-/**
- * Scan the MP4 file to find the moov atom location without loading the entire file.
- * Only reads 8-byte atom headers, skipping the massive mdat atom.
- * Returns { offset, size } of the moov atom.
- */
-async function findMoovAtom(file: File, onProgress?: (msg: string) => void): Promise<{ offset: number; size: number }> {
-  let pos = 0
-  const fileSize = file.size
-
-  while (pos < fileSize) {
-    // Read atom header (8 bytes: 4 size + 4 type)
-    const headerBuf = await file.slice(pos, pos + 16).arrayBuffer()
-    const view = new DataView(headerBuf)
-    let atomSize = readU32(view, 0)
-    const atomType = readType(view, 4)
-
-    // Handle 64-bit extended size
-    if (atomSize === 1 && headerBuf.byteLength >= 16) {
-      // 64-bit size: read next 8 bytes as big-endian uint64
-      const hi = readU32(view, 8)
-      const lo = readU32(view, 12)
-      atomSize = hi * 0x100000000 + lo
-    }
-
-    if (atomSize < 8) break // invalid atom
-
-    onProgress?.(`扫描 MP4 结构... ${atomType} (${(pos / 1024 / 1024).toFixed(0)}MB / ${(fileSize / 1024 / 1024).toFixed(0)}MB)`)
-
-    if (atomType === 'moov') {
-      return { offset: pos, size: atomSize }
-    }
-
-    pos += atomSize
-  }
-
-  throw new Error('未找到 moov 元数据。文件可能不是有效的 MP4/GoPro 视频。')
-}
-
-/**
- * Extract GPS from a video file by reading ONLY the moov atom (metadata).
- * This works with any file size because it never loads the video stream (mdat) into memory.
- * Typically reads ~2-10MB regardless of whether the video is 1GB or 8GB.
+ * Extract GPS from a video file using smart streaming extraction.
+ * Works with ANY file size (4GB, 8GB, 11GB+) without loading the video into memory.
+ * Only reads the MP4 metadata track (~5-20MB) via File.slice().
  */
 export async function parseGPSFromFile(
   file: File,
   onProgress?: (msg: string) => void,
 ): Promise<GPSPoint[]> {
-  const sizeMB = file.size / (1024 * 1024)
-  const isLargeFile = sizeMB > 500
-
-  if (isLargeFile) {
-    onProgress?.(`视频 ${(sizeMB / 1024).toFixed(1)}GB，正在扫描元数据位置（不会加载整个视频）...`)
-  }
-
-  // Step 1: Find the moov atom without loading the whole file
-  const moovInfo = await findMoovAtom(file, onProgress)
-  onProgress?.(`找到元数据区 (${(moovInfo.size / 1024 / 1024).toFixed(1)}MB)，正在读取...`)
-
-  // Step 2: Read only the moov atom + ftyp header into a minimal buffer
-  // gpmf-extract needs a valid MP4 structure, so we build: ftyp + moov (no mdat)
-  const ftypSize = Math.min(moovInfo.offset, 1024) // ftyp is usually the first atom, ~32 bytes
-  const ftypBuf = await file.slice(0, ftypSize).arrayBuffer()
-  const moovBuf = await file.slice(moovInfo.offset, moovInfo.offset + moovInfo.size).arrayBuffer()
-
-  // Combine into a single minimal MP4 buffer
-  const combined = new Uint8Array(ftypBuf.byteLength + moovBuf.byteLength)
-  combined.set(new Uint8Array(ftypBuf), 0)
-  combined.set(new Uint8Array(moovBuf), ftypBuf.byteLength)
-
-  onProgress?.('正在解析 GoPro 元数据（GPMF）...')
-
-  // Step 3: Pass the minimal buffer to gpmf-extract
-  // Create a Blob that looks like a File to gpmf-extract
-  const minimalFile = new File([combined], file.name, { type: 'video/mp4' })
-
-  let extracted: any
-  try {
-    extracted = await gpmfExtract(minimalFile, { browserMode: true } as any)
-  } catch {
-    // Fallback: if minimal buffer doesn't work, try with original file (small files only)
-    if (sizeMB < 500) {
-      onProgress?.('元数据精简提取失败，使用完整文件重试...')
-      extracted = await gpmfExtract(file, { browserMode: true } as any)
-    } else {
-      throw new Error(
-        '无法从视频中提取 GPS 元数据。\n\n' +
-        '建议：在电脑上运行以下命令提取 GPS 数据，然后上传生成的 .geojson 文件：\n' +
-        `python3 tools/extract-gps.py "${file.name}"`
-      )
-    }
-  }
-
-  if (!extracted?.rawData) {
-    throw new Error('未找到 GPMF 元数据。请确认这是 GoPro 录制的视频文件。')
-  }
+  // Step 1: Extract raw GPMF data using streaming MP4 parser
+  const { rawData, timing } = await extractGpmfFromFile(file, onProgress)
 
   onProgress?.('正在转换 GPS 坐标...')
 
+  // Step 2: Pass raw GPMF data to gopro-telemetry for GPS parsing
   let telemetry: Record<string, unknown>
   try {
     telemetry = await (goProTelemetry as any)(
-      { rawData: extracted.rawData, timing: extracted.timing },
+      { rawData, timing: { start: timing.start, duration: timing.duration } },
       { stream: ['GPS5'], smooth: 3, GPS: { fix: 2 } }
     ) as Record<string, unknown>
   } catch (err) {
