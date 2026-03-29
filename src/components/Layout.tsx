@@ -8,6 +8,7 @@ import { parseGeoJSONFile, parseGPSFromFile } from '../lib/gps-parser'
 import { parseVBO } from '../lib/vbo-parser'
 import { detectLaps } from '../lib/analysis/lap-detection'
 import { exportToPDF } from '../lib/pdf-export'
+import { exportToVBO } from '../lib/vbo-export'
 import TrackMap from './TrackMap'
 import LapList from './LapList'
 import SpeedChart from './SpeedChart'
@@ -343,6 +344,7 @@ export default function Layout({ session, aiConfig, onAiConfigChange, onNewSessi
             </>
           )}
           <button onClick={() => exportToPDF({ filename: `KartPro_${session.filename.replace(/\.[^.]+$/, '')}`, title: session.filename, date: session.date.toLocaleDateString() })} className="px-2.5 py-1 bg-gray-800 hover:bg-gray-700 text-gray-300 text-[11px] rounded-md whitespace-nowrap shrink-0">导出</button>
+          <button onClick={() => { const allPoints = session.laps.flatMap(l => l.points); exportToVBO(allPoints, session.filename) }} className="px-2.5 py-1 bg-gray-800 hover:bg-gray-700 text-green-400 text-[11px] rounded-md whitespace-nowrap shrink-0">存VBO</button>
           <button onClick={() => { setSavedProfiles(getTrackProfiles()); setShowProfileManager(true) }} className="px-2.5 py-1 bg-gray-800 hover:bg-gray-700 text-gray-300 text-[11px] rounded-md whitespace-nowrap shrink-0">赛道</button>
           <button onClick={onNewSession} className="px-2.5 py-1 bg-gray-800 hover:bg-gray-700 text-gray-300 text-[11px] rounded-md whitespace-nowrap shrink-0">新建</button>
         </div>

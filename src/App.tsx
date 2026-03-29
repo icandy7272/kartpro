@@ -327,6 +327,7 @@ function App() {
       const nameLower = file.name.toLowerCase()
       const isGeoJSON = nameLower.endsWith('.geojson') || nameLower.endsWith('.json')
       const isVBO = nameLower.endsWith('.vbo')
+      const isVideo = nameLower.endsWith('.mp4')
 
       let points: GPSPoint[]
       let vboStartFinishLine: { lat1: number; lng1: number; lat2: number; lng2: number } | undefined
@@ -338,6 +339,27 @@ function App() {
         vboStartFinishLine = vboResult.startFinishLine
       } else if (isGeoJSON) {
         points = await parseGeoJSONFile(file)
+      } else if (isVideo) {
+        // Video file — check size and show detailed progress
+        const sizeMB = file.size / (1024 * 1024)
+        const sizeGB = sizeMB / 1024
+
+        if (sizeGB > 2) {
+          setIsLoading(false)
+          setError(`视频文件 ${sizeGB.toFixed(1)}GB 太大，浏览器内存不足无法处理。\n\n建议：先用 Python 脚本提取 GPS 数据：\npython3 tools/extract-gps.py "${file.name}"\n然后上传生成的 .geojson 文件。`)
+          setProcessingStage('idle')
+          return
+        }
+
+        setLoadingStage(`正在读取视频文件 (${sizeMB.toFixed(0)}MB)...`)
+        await new Promise(r => setTimeout(r, 50))
+
+        setLoadingStage('正在解析 GoPro 元数据（GPMF）...')
+        await new Promise(r => setTimeout(r, 50))
+        points = await parseGPSFromFile(file)
+
+        setLoadingStage(`已提取 ${points.length} 个 GPS 点，建议导出 VBO 文件以便下次快速加载`)
+        await new Promise(r => setTimeout(r, 50))
       } else {
         points = await parseGPSFromFile(file)
       }
