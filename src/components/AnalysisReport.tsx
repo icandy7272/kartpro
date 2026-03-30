@@ -154,6 +154,10 @@ function ScoreBar({ score }: { score: number }) {
   )
 }
 
+function formatCoachComment(comment: string): string {
+  return comment.replace(/^赛道角色：/, '').trim()
+}
+
 /**
  * Mini SVG map showing two corner trajectories overlaid for comparison.
  * Gray = fastest overall lap, Purple = best corner lap.
@@ -653,7 +657,7 @@ export default function AnalysisReport({ analysis }: AnalysisReportProps) {
                           </span>
                         </div>
                         <p className="text-[10px] text-gray-400 mt-1 leading-relaxed">
-                          症状：{zone.symptom}。根因：{zone.rootCause}。练法：{zone.practice}
+                          现在最该先处理的是这段区域：{zone.symptom}；根子通常在 {zone.rootCause}；训练时先抓 {zone.practice}
                         </p>
                       </div>
                     ))}
@@ -700,7 +704,7 @@ export default function AnalysisReport({ analysis }: AnalysisReportProps) {
                             : 'text-gray-400 border-purple-500/50'
                         }`}
                       >
-                        {comment}
+                        {formatCoachComment(comment)}
                       </p>
                     ))}
                   </div>

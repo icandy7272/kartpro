@@ -149,21 +149,21 @@ export function buildSemanticCoachingContext(args: {
   const approachParts: string[] = []
   if (mustHitCornerNames.length > 0) {
     approachParts.push(
-      `关键出弯：${mustHitCornerNames.join('、')} 是整圈收益兑现点，宁可保守一点入弯，也要把车头摆正后尽早拿到出弯速度`,
+      `关键出弯在 ${mustHitCornerNames.join('、')}，这些地方先别贪入弯速度，重点是把车头摆正后尽早兑现出弯`,
     )
   }
   if (compoundZoneNames.length > 0) {
     approachParts.push(
-      `组合弯：${compoundZoneNames.join('，')} 必须按同一个节奏区处理，前一弯要为后一弯的出弯位置服务`,
+      `${compoundZoneNames.join('，')} 要当成一整个节奏区来跑，前一弯先为后一弯的出弯位置服务`,
     )
   }
   if (setupZoneNames.length > 0) {
-    approachParts.push(`节奏衔接：${setupZoneNames.join('，')}，不要只盯着单弯表面速度`)
+    approachParts.push(`${setupZoneNames.join('，')}，别只盯单弯表面速度，要看后一个关键弯的收益`)
   }
 
   const overallApproach =
     approachParts.length > 0
-      ? `本赛道的语义重点是：${approachParts.join('。')}。`
+      ? `整圈先抓这几件事：${approachParts.join('；')}。`
       : ''
 
   const zoneCandidates: Array<{
@@ -251,8 +251,8 @@ export function buildSemanticCoachingContext(args: {
       semanticComments,
       corner.name,
       exitDelta !== null && exitDelta > 0
-        ? `赛道角色：${corner.name} 是关键出弯弯。快慢圈出弯速度还差 ${exitDelta} km/h，先把车头摆正，再更早、更坚决地兑现油门。`
-        : `赛道角色：${corner.name} 是关键出弯弯。这里的首要目标不是“带更多入弯速度”，而是更早摆正车头并兑现出弯速度。`,
+        ? `赛道角色：这里是关键出弯弯。快慢圈出弯速度还差 ${exitDelta} km/h，先把车头摆正，再更早、更坚决地兑现油门。`
+        : '赛道角色：这里是关键出弯弯。先别急着带更多入弯速度，优先把车头扶正，把出弯速度带出去。',
     )
   }
 
@@ -263,12 +263,12 @@ export function buildSemanticCoachingContext(args: {
     mergeComments(
       semanticComments,
       entryCorner.name,
-      `赛道角色：${entryCorner.name}→${exitCorner.name} 是组合弯，第一弯的速度和车位要为第二弯的出弯质量服务，不要把它拆成两个独立动作。`,
+      `赛道角色：这组是组合弯。第一弯的速度和车位要先服务第二弯的出弯，不要把它拆成两个独立动作。`,
     )
     mergeComments(
       semanticComments,
       exitCorner.name,
-      `赛道角色：延续 ${entryCorner.name}→${exitCorner.name} 的整段节奏，把当前弯当成上一弯的下半段来完成，避免两弯之间多余修正。`,
+      `赛道角色：延续 ${entryCorner.name}→${exitCorner.name} 的整段节奏，把当前弯当成上一弯的下半段来完成，尽量别在两弯之间多做修正。`,
     )
   }
 
@@ -279,7 +279,7 @@ export function buildSemanticCoachingContext(args: {
     mergeComments(
       semanticComments,
       setupCorner.name,
-      `赛道角色：${setupCorner.name} 的任务是为 ${targetCorner.name} 铺路。允许这里牺牲一点表面速度，换取下一个关键弯更容易把车摆正。`,
+      `赛道角色：这一弯的任务是为 ${targetCorner.name} 铺路。这里可以少要一点表面速度，换取下一个关键弯更容易把车摆正。`,
     )
   }
 
@@ -290,7 +290,7 @@ export function buildSemanticCoachingContext(args: {
     mergeComments(
       semanticComments,
       entryCorner.name,
-      `赛道角色：${entryCorner.name} 可以接受更保守的入弯姿态，目标是把轮胎和车身状态留给 ${targetCorner.name} 的真正收益点。`,
+      `赛道角色：这里可以接受更保守的入弯姿态，目标是把轮胎和车身状态留给 ${targetCorner.name} 的真正收益点。`,
     )
   }
 

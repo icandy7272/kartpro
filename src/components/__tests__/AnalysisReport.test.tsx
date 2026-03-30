@@ -106,6 +106,7 @@ describe('AnalysisReport', () => {
     render(<AnalysisReport analysis={makeAnalysisFixture()} />)
 
     expect(screen.getByText('直道入口弯')).toBeInTheDocument()
-    expect(screen.getByText(/赛道角色：T2 是关键出弯弯/)).toBeInTheDocument()
+    expect(screen.getByText(/T2 是关键出弯弯/)).toBeInTheDocument()
+    expect(screen.queryByText(/赛道角色：/)).not.toBeInTheDocument()
   })
 })
