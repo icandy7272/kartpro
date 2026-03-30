@@ -245,7 +245,7 @@ function CornerTrajectoryMap({ bestLine, refLine, bestLapId, refLapId, bestSpeed
 export default function AnalysisReport({ analysis }: AnalysisReportProps) {
   const {
     theoreticalBest, fastestVsSlowest, brakingPattern,
-    lapGroups, cornerCorrelation, trainingPlan, cornerScoring, cornerNarrative,
+    lapGroups, cornerCorrelation, trainingPlan, cornerScoring, cornerNarrative, trackStrategy,
   } = analysis
 
   if (theoreticalBest.perCorner.length === 0) {
@@ -609,27 +609,84 @@ export default function AnalysisReport({ analysis }: AnalysisReportProps) {
         </Section>
       )}
 
-      {/* 11. Coaching Narrative */}
-      {cornerNarrative.length > 0 && (
+      {/* 11. Track Strategy + Coaching Narrative */}
+      {trackStrategy.overallApproach && (
         <Section title="教练点评" defaultOpen icon="🗣️">
-          <div className="space-y-2">
-            {cornerNarrative
-              .filter((c) => {
-                const scoring = cornerScoring.find((s) => s.corner === c.corner)
-                return scoring && scoring.score > 3
-              })
-              .map((c) => (
-                <div key={c.corner} className="bg-gray-900/50 rounded-lg p-3 border border-gray-700/30">
-                  <div className="text-xs font-bold text-gray-200 mb-1.5">{c.corner}</div>
-                  <div className="space-y-1">
-                    {c.comments.map((comment, i) => (
-                      <p key={i} className="text-[11px] text-gray-400 pl-2 border-l-2 border-purple-500/50">
-                        {comment}
-                      </p>
-                    ))}
+          <div className="space-y-3">
+            {/* Overall approach */}
+            <div className="bg-purple-500/10 rounded-lg p-3 border border-purple-500/30">
+              <div className="text-[11px] font-bold text-purple-300 mb-1">整圈主线</div>
+              <p className="text-[11px] text-gray-300 leading-relaxed">{trackStrategy.overallApproach}</p>
+            </div>
+
+            {/* Priority zones */}
+            {trackStrategy.priorityZones.length > 0 && (
+              <div className="space-y-2">
+                <div className="text-[11px] font-bold text-gray-400">重点区域（按 ROI 排序）</div>
+                {trackStrategy.priorityZones.map((zone) => (
+                  <div key={zone.zone} className="bg-gray-900/50 rounded-lg p-3 border border-gray-700/30">
+                    <div className="flex items-center gap-2 mb-2">
+                      <span className="w-5 h-5 rounded-full bg-purple-500/30 text-purple-300 text-[10px] font-bold flex items-center justify-center border border-purple-500/50">
+                        {zone.priority}
+                      </span>
+                      <span className="text-xs font-bold text-gray-200">{zone.zone}</span>
+                      <span className="text-[10px] text-green-400 ml-auto">{zone.targetGain}</span>
+                    </div>
+                    <div className="space-y-1 pl-7">
+                      <div className="text-[11px] text-gray-400"><span className="text-yellow-400">症状：</span>{zone.symptom}</div>
+                      <div className="text-[11px] text-gray-400"><span className="text-orange-400">根因：</span>{zone.rootCause}</div>
+                      <div className="text-[11px] text-gray-400"><span className="text-cyan-400">练法：</span>{zone.practice}</div>
+                    </div>
                   </div>
+                ))}
+              </div>
+            )}
+
+            {/* Per-corner detailed coaching */}
+            {cornerNarrative.length > 0 && (
+              <div className="space-y-2">
+                <div className="text-[11px] font-bold text-gray-400">逐弯点评</div>
+                {cornerNarrative
+                  .map((c) => {
+                    const cr = trackStrategy.cornerRoles.find(r => r.corner === c.corner)
+                    const roleLabel = cr?.role === '直道入口弯' ? '🏁 直道入口弯'
+                      : cr?.role === '组合弯' ? '🔗 组合弯'
+                      : ''
+                    return (
+                      <div key={c.corner} className="bg-gray-900/50 rounded-lg p-3 border border-gray-700/30">
+                        <div className="flex items-center gap-2 mb-1.5">
+                          <span className="text-xs font-bold text-gray-200">{c.corner}</span>
+                          {roleLabel && (
+                            <span className="text-[10px] text-gray-500">{roleLabel}</span>
+                          )}
+                        </div>
+                        <div className="space-y-1">
+                          {c.comments.map((comment, i) => (
+                            <p key={i} className="text-[11px] text-gray-400 pl-2 border-l-2 border-purple-500/50">
+                              {comment}
+                            </p>
+                          ))}
+                        </div>
+                      </div>
+                    )
+                  })}
+              </div>
+            )}
+
+            {/* Training closure */}
+            {trackStrategy.trainingClosure.length > 0 && (
+              <div className="bg-green-500/10 rounded-lg p-3 border border-green-500/30">
+                <div className="text-[11px] font-bold text-green-300 mb-1">训练闭环</div>
+                <div className="space-y-1">
+                  {trackStrategy.trainingClosure.map((tc, i) => (
+                    <div key={i} className="text-[11px] text-gray-400">
+                      <span className="text-green-400">{i + 1}.</span> {tc.focus}
+                      <span className="text-gray-500 ml-1">（看 {tc.metric}，目标：{tc.target}）</span>
+                    </div>
+                  ))}
                 </div>
-              ))}
+              </div>
+            )}
           </div>
         </Section>
       )}
