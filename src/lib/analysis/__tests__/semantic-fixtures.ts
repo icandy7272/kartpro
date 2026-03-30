@@ -1,4 +1,5 @@
 import type { Corner, Lap, GPSPoint } from '../../../types'
+import type { InferTrackSemanticsArgs } from '../semantic-types'
 
 const BASE_LAT = 31.2304
 const BASE_LNG = 121.4737
@@ -111,4 +112,140 @@ export function makeOutOfRangeSemanticCorners(): Corner[] {
       startIndex: 999,
     },
   ]
+}
+
+export function makeInferenceReferenceLap(): Lap {
+  const points: GPSPoint[] = [
+    makeMeterPoint(0, 0, 28, 0), // 0
+    makeMeterPoint(20, 0, 28, 1000), // 1
+    makeMeterPoint(40, 0, 24, 2000), // 2
+    makeMeterPoint(55, 5, 24, 3000), // 3
+    makeMeterPoint(70, 15, 22, 4000), // 4
+    makeMeterPoint(100, 20, 25, 5000), // 5
+    makeMeterPoint(130, 20, 20, 6000), // 6
+    makeMeterPoint(200, 20, 30, 7000), // 7
+    makeMeterPoint(240, 20, 32, 8000), // 8
+    makeMeterPoint(250, 25, 24, 9000), // 9
+    makeMeterPoint(260, 30, 22, 10000), // 10
+    makeMeterPoint(268, 32, 20, 11000), // 11
+    makeMeterPoint(280, 45, 26, 12000), // 12
+    makeMeterPoint(300, 60, 28, 13000), // 13
+  ]
+
+  return {
+    id: 202,
+    points,
+    startTime: 0,
+    endTime: 13000,
+    duration: 13,
+    distance: 360,
+    maxSpeed: 32 * 3.6,
+    avgSpeed: 25 * 3.6,
+  }
+}
+
+export function makeInferenceCorners(): Corner[] {
+  return [
+    {
+      id: 1,
+      name: 'T1',
+      startIndex: 2,
+      endIndex: 2,
+      midpointIndex: 2,
+      apexIndex: 2,
+      direction: 'right',
+      angle: 40,
+      type: '中速弯',
+      entrySpeed: 98,
+      minSpeed: 84,
+      exitSpeed: 95,
+      duration: 1.0,
+    },
+    {
+      id: 2,
+      name: 'T2',
+      startIndex: 4,
+      endIndex: 4,
+      midpointIndex: 4,
+      apexIndex: 4,
+      direction: 'left',
+      angle: 45,
+      type: '中速弯',
+      entrySpeed: 92,
+      minSpeed: 80,
+      exitSpeed: 88,
+      duration: 1.1,
+    },
+    {
+      id: 3,
+      name: 'T3',
+      startIndex: 6,
+      endIndex: 6,
+      midpointIndex: 6,
+      apexIndex: 6,
+      direction: 'right',
+      angle: 55,
+      type: '低速弯',
+      entrySpeed: 90,
+      minSpeed: 74,
+      exitSpeed: 96,
+      duration: 1.2,
+    },
+    {
+      id: 4,
+      name: 'T4',
+      startIndex: 9,
+      endIndex: 9,
+      midpointIndex: 9,
+      apexIndex: 9,
+      direction: 'left',
+      angle: 38,
+      type: '中速弯',
+      entrySpeed: 94,
+      minSpeed: 79,
+      exitSpeed: 90,
+      duration: 1.0,
+    },
+    {
+      id: 5,
+      name: 'T5',
+      startIndex: 10,
+      endIndex: 10,
+      midpointIndex: 10,
+      apexIndex: 10,
+      direction: 'right',
+      angle: 30,
+      type: '低速弯',
+      entrySpeed: 86,
+      minSpeed: 72,
+      exitSpeed: 84,
+      duration: 0.8,
+    },
+    {
+      id: 6,
+      name: 'T6',
+      startIndex: 11,
+      endIndex: 11,
+      midpointIndex: 11,
+      apexIndex: 11,
+      direction: 'right',
+      angle: 28,
+      type: '低速弯',
+      entrySpeed: 84,
+      minSpeed: 70,
+      exitSpeed: 88,
+      duration: 0.8,
+    },
+  ]
+}
+
+export function makeInferenceFixture(): InferTrackSemanticsArgs {
+  const referenceLap = makeInferenceReferenceLap()
+  return {
+    trackId: 'track-inference-fixture',
+    version: 1,
+    sourceLapId: referenceLap.id,
+    referenceLap,
+    corners: makeInferenceCorners(),
+  }
 }
