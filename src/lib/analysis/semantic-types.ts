@@ -56,6 +56,8 @@ export type SemanticTagStatus =
 export interface SemanticTag {
   id: string
   tagType: SemanticTagType
+  // For single-corner tags this is [cornerId].
+  // For relationship tags this is [fromCornerId, toCornerId] in track order (upstream -> downstream).
   targetCornerIds: number[]
   confidence: number
   reasonCodes: SemanticReasonCode[]
@@ -69,6 +71,7 @@ export type SemanticConfirmationRecommendation = 'confirm' | 'review'
 export interface SemanticConfirmation {
   id: string
   tagType: SemanticTagType
+  // Ordering matches SemanticTag.targetCornerIds.
   targetCornerIds: number[]
   confidence: number
   prompt: string

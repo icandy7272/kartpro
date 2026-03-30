@@ -10,6 +10,7 @@ import type {
 
 const HIGH_CONFIDENCE = 0.8
 const MEDIUM_CONFIDENCE = 0.55
+const NEAR_HIGH_CONFIDENCE = 0.72
 const LONG_STRAIGHT_M = 80
 const SHORT_CONNECTOR_MAX_M = 25
 
@@ -34,10 +35,12 @@ function applyConfidencePolicy(
   candidate: SemanticCandidate,
   semanticTags: SemanticTag[],
   pendingConfirmations: SemanticConfirmation[],
+  emittedIds: Set<string>,
 ): void {
   const rawScore = candidate.score
   const confidence = Number(rawScore.toFixed(2))
   const id = makeSemanticId(candidate.tagType, candidate.targetCornerIds)
+  if (emittedIds.has(id)) return
 
   if (rawScore >= HIGH_CONFIDENCE) {
     semanticTags.push({
@@ -49,6 +52,7 @@ function applyConfidencePolicy(
       explanation: candidate.explanation,
       status: 'auto-active',
     })
+    emittedIds.add(id)
   } else if (rawScore >= MEDIUM_CONFIDENCE) {
     pendingConfirmations.push({
       id,
@@ -56,8 +60,9 @@ function applyConfidencePolicy(
       targetCornerIds: candidate.targetCornerIds,
       confidence,
       prompt: candidate.prompt,
-      recommendation: 'review',
+      recommendation: rawScore >= NEAR_HIGH_CONFIDENCE ? 'confirm' : 'review',
     })
+    emittedIds.add(id)
   }
 }
 
@@ -72,6 +77,7 @@ export function inferTrackSemantics(args: InferTrackSemanticsArgs): TrackSemanti
   )
   const semanticTags: SemanticTag[] = []
   const pendingConfirmations: SemanticConfirmation[] = []
+  const emittedIds = new Set<string>()
 
   for (const straight of skeleton.straights) {
     const fromCorner = cornerById.get(straight.fromCornerId)
@@ -103,6 +109,7 @@ export function inferTrackSemantics(args: InferTrackSemanticsArgs): TrackSemanti
       },
       semanticTags,
       pendingConfirmations,
+      emittedIds,
     )
   }
 
@@ -137,6 +144,7 @@ export function inferTrackSemantics(args: InferTrackSemanticsArgs): TrackSemanti
       },
       semanticTags,
       pendingConfirmations,
+      emittedIds,
     )
   }
 
@@ -147,6 +155,7 @@ export function inferTrackSemantics(args: InferTrackSemanticsArgs): TrackSemanti
     const fromCorner = cornerById.get(straight.fromCornerId)
     const toCorner = cornerById.get(straight.toCornerId)
     if (!fromCorner || !toCorner) continue
+    if (straight.wrapsLap || downstream.wrapsLap) continue
 
     const downstreamDeltaScore = clamp((downstream.lengthM - straight.lengthM) / 120, 0, 1)
     const setupScore = clamp(0.35 + downstreamDeltaScore * 0.25, 0, 1)
@@ -165,6 +174,7 @@ export function inferTrackSemantics(args: InferTrackSemanticsArgs): TrackSemanti
       },
       semanticTags,
       pendingConfirmations,
+      emittedIds,
     )
 
     applyConfidencePolicy(
@@ -178,6 +188,7 @@ export function inferTrackSemantics(args: InferTrackSemanticsArgs): TrackSemanti
       },
       semanticTags,
       pendingConfirmations,
+      emittedIds,
     )
   }
 
