@@ -38,5 +38,11 @@ describe('inferTrackSemantics', () => {
         (tag) => tag.tagType === 'setup-corner' && tag.status === 'auto-active',
       ),
     ).toBe(false)
+
+    expect(
+      model.semanticTags.some(
+        (tag) => tag.tagType === 'sacrifice-entry' && tag.status === 'auto-active',
+      ),
+    ).toBe(false)
   })
 })

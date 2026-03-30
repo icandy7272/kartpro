@@ -35,10 +35,11 @@ function applyConfidencePolicy(
   semanticTags: SemanticTag[],
   pendingConfirmations: SemanticConfirmation[],
 ): void {
-  const confidence = Number(candidate.score.toFixed(2))
+  const rawScore = candidate.score
+  const confidence = Number(rawScore.toFixed(2))
   const id = makeSemanticId(candidate.tagType, candidate.targetCornerIds)
 
-  if (confidence >= HIGH_CONFIDENCE) {
+  if (rawScore >= HIGH_CONFIDENCE) {
     semanticTags.push({
       id,
       tagType: candidate.tagType,
@@ -48,7 +49,7 @@ function applyConfidencePolicy(
       explanation: candidate.explanation,
       status: 'auto-active',
     })
-  } else if (confidence >= MEDIUM_CONFIDENCE) {
+  } else if (rawScore >= MEDIUM_CONFIDENCE) {
     pendingConfirmations.push({
       id,
       tagType: candidate.tagType,
