@@ -629,7 +629,7 @@ export default function AnalysisReport({ analysis }: AnalysisReportProps) {
                 {trackStrategy.overallApproach && (
                   <div>
                     <div className="text-[10px] uppercase tracking-wide text-purple-300 font-bold mb-1">
-                      赛道语义策略
+                      赛道策略
                     </div>
                     <p className="text-[11px] text-gray-300 leading-relaxed">
                       {trackStrategy.overallApproach}
@@ -665,7 +665,11 @@ export default function AnalysisReport({ analysis }: AnalysisReportProps) {
             {cornerNarrative
               .filter((c) => {
                 const scoring = cornerScoring.find((s) => s.corner === c.corner)
-                return scoring && scoring.score > 3
+                const role = roleByCorner.get(c.corner)
+                const hasStrategicRole = role ? role.role !== '独立弯' : false
+                const hasPriorityZone = priorityZoneByCorner.has(c.corner)
+                const hasRoleComment = c.comments.some((comment) => comment.startsWith('赛道角色：'))
+                return (scoring && scoring.score > 3) || hasStrategicRole || hasPriorityZone || hasRoleComment
               })
               .map((c) => (
                 <div key={c.corner} className="bg-gray-900/50 rounded-lg p-3 border border-gray-700/30">
@@ -691,7 +695,7 @@ export default function AnalysisReport({ analysis }: AnalysisReportProps) {
                       <p
                         key={i}
                         className={`text-[11px] pl-2 border-l-2 ${
-                          comment.startsWith('语义重点：')
+                          comment.startsWith('赛道角色：')
                             ? 'text-amber-100 border-amber-400/70 bg-amber-500/5 rounded-r-md py-1 pr-2'
                             : 'text-gray-400 border-purple-500/50'
                         }`}

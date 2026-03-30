@@ -157,6 +157,11 @@ function stdDev(values: number[]): number {
   return Math.sqrt(variance)
 }
 
+function distanceToPoint(points: GPSPoint[], pointIndex: number): number {
+  if (pointIndex <= 0) return 0
+  return cornerDistance(points, 0, Math.min(pointIndex, points.length - 1))
+}
+
 function isSemanticModel(
   value: TrackSemanticModel | RacingLineAnalysis[] | undefined,
 ): value is TrackSemanticModel {
@@ -224,6 +229,7 @@ export function generateFullAnalysis(
   const slowestLap = laps.reduce((worst, lap) => (lap.duration > worst.duration ? lap : worst), laps[0])
   const fastestAnalysis = analyses.find((a) => a.lap.id === fastestLap.id)!
   const slowestAnalysis = analyses.find((a) => a.lap.id === slowestLap.id)!
+  const lapById = new Map(laps.map((lap) => [lap.id, lap]))
 
   const numCorners = corners.length
 
@@ -1070,9 +1076,20 @@ export function generateFullAnalysis(
     // ---- 走线分析（来自 racing-line-analysis 模块）----
     if (racingLineAnalyses && racingLineAnalyses.length > 0) {
       // Aggregate racing line data across all comparison laps for this corner
-      const cornerLineData = racingLineAnalyses
-        .map(rla => rla.corners.find(c => c.cornerName === cName))
-        .filter((c): c is NonNullable<typeof c> => c != null)
+      const cornerLineEntries = racingLineAnalyses
+        .map((rla) => ({
+          racingLineAnalysis: rla,
+          corner: rla.corners.find((c) => c.cornerName === cName),
+        }))
+        .filter(
+          (
+            entry,
+          ): entry is {
+            racingLineAnalysis: RacingLineAnalysis
+            corner: NonNullable<RacingLineAnalysis['corners'][number] | undefined>
+          } => entry.corner != null,
+        )
+      const cornerLineData = cornerLineEntries.map((entry) => entry.corner)
 
       if (cornerLineData.length > 0) {
         const lineParts: string[] = []
@@ -1087,30 +1104,58 @@ export function generateFullAnalysis(
         }
 
         // Brake point comparison: comparison laps vs reference (fastest) lap
-        const brakePtsWithRef = cornerLineData.filter(c => c.brakePoint && c.refBrakePoint)
+        const brakePtsWithRef = cornerLineEntries.filter(
+          (entry) => entry.corner.brakePoint && entry.corner.refBrakePoint,
+        )
         if (brakePtsWithRef.length > 0) {
-          const avgBrakeSpeed = brakePtsWithRef.reduce((s, c) => s + c.brakePoint!.speed, 0) / brakePtsWithRef.length
-          const refBrakeSpeed = brakePtsWithRef[0].refBrakePoint!.speed
-          const avgBrakeIdx = brakePtsWithRef.reduce((s, c) => s + c.brakePoint!.pointIndex, 0) / brakePtsWithRef.length
-          const refBrakeIdx = brakePtsWithRef[0].refBrakePoint!.pointIndex
-          const idxDiff = avgBrakeIdx - refBrakeIdx  // negative = braking earlier than ref
-          if (Math.abs(idxDiff) > 2) {
-            lineParts.push(`刹车点比快圈${idxDiff < 0 ? '早' : '晚'}约 ${Math.abs(Math.round(idxDiff))} 个采样点（刹车速度 ${Math.round(avgBrakeSpeed)} vs 快圈 ${Math.round(refBrakeSpeed)} km/h）`)
+          const avgBrakeSpeed =
+            brakePtsWithRef.reduce((sum, entry) => sum + entry.corner.brakePoint!.speed, 0) /
+            brakePtsWithRef.length
+          const refBrakeSpeed = brakePtsWithRef[0].corner.refBrakePoint!.speed
+          const avgBrakeDeltaM =
+            brakePtsWithRef.reduce((sum, entry) => {
+              const comparisonLap = lapById.get(entry.racingLineAnalysis.comparisonLapId)
+              const referenceLap = lapById.get(entry.racingLineAnalysis.referenceLapId)
+              if (!comparisonLap || !referenceLap) return sum
+              return (
+                sum +
+                (distanceToPoint(comparisonLap.points, entry.corner.brakePoint!.pointIndex) -
+                  distanceToPoint(referenceLap.points, entry.corner.refBrakePoint!.pointIndex))
+              )
+            }, 0) / brakePtsWithRef.length
+          if (Math.abs(avgBrakeDeltaM) > 1.5) {
+            lineParts.push(
+              `刹车点比快圈${avgBrakeDeltaM < 0 ? '早' : '晚'}约 ${Math.abs(avgBrakeDeltaM).toFixed(1)}m（刹车速度 ${Math.round(avgBrakeSpeed)} vs 快圈 ${Math.round(refBrakeSpeed)} km/h）`,
+            )
           } else {
             lineParts.push(`刹车点与快圈一致（${Math.round(avgBrakeSpeed)} km/h）`)
           }
         }
 
         // Throttle point comparison
-        const throttlePtsWithRef = cornerLineData.filter(c => c.throttlePoint && c.refThrottlePoint)
+        const throttlePtsWithRef = cornerLineEntries.filter(
+          (entry) => entry.corner.throttlePoint && entry.corner.refThrottlePoint,
+        )
         if (throttlePtsWithRef.length > 0) {
-          const avgThrottleSpeed = throttlePtsWithRef.reduce((s, c) => s + c.throttlePoint!.speed, 0) / throttlePtsWithRef.length
-          const refThrottleSpeed = throttlePtsWithRef[0].refThrottlePoint!.speed
-          const avgThrottleIdx = throttlePtsWithRef.reduce((s, c) => s + c.throttlePoint!.pointIndex, 0) / throttlePtsWithRef.length
-          const refThrottleIdx = throttlePtsWithRef[0].refThrottlePoint!.pointIndex
-          const idxDiff = avgThrottleIdx - refThrottleIdx  // positive = throttle later than ref
-          if (Math.abs(idxDiff) > 2) {
-            lineParts.push(`补油点比快圈${idxDiff > 0 ? '晚' : '早'}约 ${Math.abs(Math.round(idxDiff))} 个采样点（补油速度 ${Math.round(avgThrottleSpeed)} vs 快圈 ${Math.round(refThrottleSpeed)} km/h）`)
+          const avgThrottleSpeed =
+            throttlePtsWithRef.reduce((sum, entry) => sum + entry.corner.throttlePoint!.speed, 0) /
+            throttlePtsWithRef.length
+          const refThrottleSpeed = throttlePtsWithRef[0].corner.refThrottlePoint!.speed
+          const avgThrottleDeltaM =
+            throttlePtsWithRef.reduce((sum, entry) => {
+              const comparisonLap = lapById.get(entry.racingLineAnalysis.comparisonLapId)
+              const referenceLap = lapById.get(entry.racingLineAnalysis.referenceLapId)
+              if (!comparisonLap || !referenceLap) return sum
+              return (
+                sum +
+                (distanceToPoint(comparisonLap.points, entry.corner.throttlePoint!.pointIndex) -
+                  distanceToPoint(referenceLap.points, entry.corner.refThrottlePoint!.pointIndex))
+              )
+            }, 0) / throttlePtsWithRef.length
+          if (Math.abs(avgThrottleDeltaM) > 1.5) {
+            lineParts.push(
+              `补油点比快圈${avgThrottleDeltaM > 0 ? '晚' : '早'}约 ${Math.abs(avgThrottleDeltaM).toFixed(1)}m（补油速度 ${Math.round(avgThrottleSpeed)} vs 快圈 ${Math.round(refThrottleSpeed)} km/h）`,
+            )
           } else {
             lineParts.push(`补油点与快圈一致（${Math.round(avgThrottleSpeed)} km/h）`)
           }
