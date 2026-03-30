@@ -151,13 +151,7 @@ export default function Layout({ session, aiConfig, onAiConfigChange, onNewSessi
   }, [session.analyses, fastestLap.id])
 
   // Full analysis for dashboard cards
-  const fullAnalysis = useMemo(() => {
-    const laps = session.analyses.map((a) => a.lap)
-    const corners = session.analyses[0]?.corners ?? []
-    return generateFullAnalysis(laps, corners, session.analyses)
-  }, [session.analyses])
-
-  // Racing line analysis for all laps vs fastest
+  // Racing line analysis for all laps vs fastest (computed first — used by fullAnalysis)
   const racingLineAnalyses = useMemo((): RacingLineAnalysis[] => {
     if (session.analyses.length < 2) return []
     const corners = session.analyses[0]?.corners ?? []
@@ -166,6 +160,12 @@ export default function Layout({ session, aiConfig, onAiConfigChange, onNewSessi
       .filter((a) => a.lap.id !== fastestLap.id)
       .map((a) => analyzeRacingLine(fastestLap, a.lap, fastestAnalysis, a, corners))
   }, [session.analyses, fastestLap])
+
+  const fullAnalysis = useMemo(() => {
+    const laps = session.analyses.map((a) => a.lap)
+    const corners = session.analyses[0]?.corners ?? []
+    return generateFullAnalysis(laps, corners, session.analyses, racingLineAnalyses)
+  }, [session.analyses, racingLineAnalyses])
 
   // Current racing line analysis for selected comparison lap
   const currentRLA = useMemo(() => {

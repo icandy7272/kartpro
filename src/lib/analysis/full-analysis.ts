@@ -1,4 +1,4 @@
-import type { Lap, Corner, LapAnalysis, GPSPoint } from '../../types'
+import type { Lap, Corner, LapAnalysis, GPSPoint, RacingLineAnalysis } from '../../types'
 
 export interface FullAnalysis {
   theoreticalBest: {
@@ -158,7 +158,8 @@ function stdDev(values: number[]): number {
 export function generateFullAnalysis(
   laps: Lap[],
   corners: Corner[],
-  analyses: LapAnalysis[]
+  analyses: LapAnalysis[],
+  racingLineAnalyses?: RacingLineAnalysis[]
 ): FullAnalysis {
   if (analyses.length === 0 || corners.length === 0) {
     return {
@@ -1022,6 +1023,69 @@ export function generateFullAnalysis(
     } else {
       // 高速弯
       comments.push(`🔄 转向：${angle}°${dir}高速弯，关键是保持平滑转向输入，避免方向盘突然修正。目标是一把转向到位，减少转向角度。`)
+    }
+
+    // ---- 走线分析（来自 racing-line-analysis 模块）----
+    if (racingLineAnalyses && racingLineAnalyses.length > 0) {
+      // Aggregate racing line data across all comparison laps for this corner
+      const cornerLineData = racingLineAnalyses
+        .map(rla => rla.corners.find(c => c.cornerName === cName))
+        .filter((c): c is NonNullable<typeof c> => c != null)
+
+      if (cornerLineData.length > 0) {
+        const lineParts: string[] = []
+
+        // Average lateral deviation across all comparison laps
+        const avgMeanDev = cornerLineData.reduce((s, c) => s + c.meanDeviation, 0) / cornerLineData.length
+        const avgMaxDev = cornerLineData.reduce((s, c) => s + c.maxDeviation, 0) / cornerLineData.length
+        if (Math.abs(avgMeanDev) > 0.3) {
+          lineParts.push(`走线平均偏${avgMeanDev > 0 ? '外' : '内'} ${Math.abs(avgMeanDev).toFixed(1)}m（最大偏差 ${avgMaxDev.toFixed(1)}m）`)
+        } else {
+          lineParts.push(`走线偏差小（平均 ${Math.abs(avgMeanDev).toFixed(1)}m）`)
+        }
+
+        // Brake point comparison: comparison laps vs reference (fastest) lap
+        const brakePtsWithRef = cornerLineData.filter(c => c.brakePoint && c.refBrakePoint)
+        if (brakePtsWithRef.length > 0) {
+          const avgBrakeSpeed = brakePtsWithRef.reduce((s, c) => s + c.brakePoint!.speed, 0) / brakePtsWithRef.length
+          const refBrakeSpeed = brakePtsWithRef[0].refBrakePoint!.speed
+          const avgBrakeIdx = brakePtsWithRef.reduce((s, c) => s + c.brakePoint!.pointIndex, 0) / brakePtsWithRef.length
+          const refBrakeIdx = brakePtsWithRef[0].refBrakePoint!.pointIndex
+          const idxDiff = avgBrakeIdx - refBrakeIdx  // negative = braking earlier than ref
+          if (Math.abs(idxDiff) > 2) {
+            lineParts.push(`刹车点比快圈${idxDiff < 0 ? '早' : '晚'}约 ${Math.abs(Math.round(idxDiff))} 个采样点（刹车速度 ${Math.round(avgBrakeSpeed)} vs 快圈 ${Math.round(refBrakeSpeed)} km/h）`)
+          } else {
+            lineParts.push(`刹车点与快圈一致（${Math.round(avgBrakeSpeed)} km/h）`)
+          }
+        }
+
+        // Throttle point comparison
+        const throttlePtsWithRef = cornerLineData.filter(c => c.throttlePoint && c.refThrottlePoint)
+        if (throttlePtsWithRef.length > 0) {
+          const avgThrottleSpeed = throttlePtsWithRef.reduce((s, c) => s + c.throttlePoint!.speed, 0) / throttlePtsWithRef.length
+          const refThrottleSpeed = throttlePtsWithRef[0].refThrottlePoint!.speed
+          const avgThrottleIdx = throttlePtsWithRef.reduce((s, c) => s + c.throttlePoint!.pointIndex, 0) / throttlePtsWithRef.length
+          const refThrottleIdx = throttlePtsWithRef[0].refThrottlePoint!.pointIndex
+          const idxDiff = avgThrottleIdx - refThrottleIdx  // positive = throttle later than ref
+          if (Math.abs(idxDiff) > 2) {
+            lineParts.push(`补油点比快圈${idxDiff > 0 ? '晚' : '早'}约 ${Math.abs(Math.round(idxDiff))} 个采样点（补油速度 ${Math.round(avgThrottleSpeed)} vs 快圈 ${Math.round(refThrottleSpeed)} km/h）`)
+          } else {
+            lineParts.push(`补油点与快圈一致（${Math.round(avgThrottleSpeed)} km/h）`)
+          }
+        }
+
+        // Curvature consistency
+        const avgConsistency = Math.round(cornerLineData.reduce((s, c) => s + c.curvatureConsistency, 0) / cornerLineData.length)
+        if (avgConsistency < 70) {
+          lineParts.push(`走线曲率一致性仅 ${avgConsistency}%，每圈走线变化大，需要固定走线`)
+        } else if (avgConsistency < 85) {
+          lineParts.push(`走线曲率一致性 ${avgConsistency}%，尚可但有优化空间`)
+        } else {
+          lineParts.push(`走线曲率一致性 ${avgConsistency}%，走线稳定`)
+        }
+
+        comments.push(`🎯 走线：${lineParts.join('。')}。`)
+      }
     }
 
     // ---- 油门/出弯分析（每弯都输出）----

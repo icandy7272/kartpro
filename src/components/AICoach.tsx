@@ -296,12 +296,6 @@ export default function AICoach({ analyses, aiConfig, onConfigChange }: AICoachP
 
   const report = useMemo(() => generateReport(analyses), [analyses])
 
-  const fullAnalysis = useMemo(() => {
-    const laps = analyses.map((a) => a.lap)
-    const corners = analyses[0]?.corners ?? []
-    return generateFullAnalysis(laps, corners, analyses)
-  }, [analyses])
-
   const racingLineAnalyses = useMemo((): RacingLineAnalysis[] => {
     if (analyses.length < 2) return []
     const laps = analyses.map((a) => a.lap)
@@ -312,6 +306,12 @@ export default function AICoach({ analyses, aiConfig, onConfigChange }: AICoachP
       .filter((a) => a.lap.id !== fastestLap.id)
       .map((a) => analyzeRacingLine(fastestLap, a.lap, fastestAnalysis, a, corners))
   }, [analyses])
+
+  const fullAnalysis = useMemo(() => {
+    const laps = analyses.map((a) => a.lap)
+    const corners = analyses[0]?.corners ?? []
+    return generateFullAnalysis(laps, corners, analyses, racingLineAnalyses)
+  }, [analyses, racingLineAnalyses])
 
   const fastestLapId = useMemo(() => {
     const laps = analyses.map((a) => a.lap)
