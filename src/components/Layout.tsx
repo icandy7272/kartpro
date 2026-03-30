@@ -7,6 +7,7 @@ import { getTrackProfiles, deleteTrackProfile } from '../lib/track-profiles'
 import { parseGeoJSONFile, parseGPSFromFile } from '../lib/gps-parser'
 import { parseVBO } from '../lib/vbo-parser'
 import { detectLaps } from '../lib/analysis/lap-detection'
+import { rebuildSessionDerivedData } from '../lib/analysis/session-derived-data'
 import { exportToPDF } from '../lib/pdf-export'
 import { exportToVBO } from '../lib/vbo-export'
 import TrackMap from './TrackMap'
@@ -24,7 +25,7 @@ interface LayoutProps {
   aiConfig: AIConfig | null
   onAiConfigChange: (config: AIConfig | null) => void
   onNewSession: () => void
-  onUpdateSession: (session: TrainingSession) => void
+  onUpdateSession: (session: TrainingSession | null) => void
 }
 
 function formatTime(seconds: number): string {
@@ -202,16 +203,30 @@ export default function Layout({ session, aiConfig, onAiConfigChange, onNewSessi
     newCorners.push(newCorner)
     newCorners.sort((a, b) => a.startIndex - b.startIndex)
     newCorners.forEach((c, i) => { c.id = i + 1; c.name = `T${i + 1}` })
-    const analyses = session.laps.map(lap => reanalyzeLap(lap, newCorners, fastestLap.points))
-    onUpdateSession({ ...session, corners: newCorners, analyses })
+    const derived = rebuildSessionDerivedData({
+      laps: session.laps,
+      corners: newCorners,
+      startFinishLine: session.startFinishLine,
+      filename: session.filename,
+      date: session.date,
+      trackId: session.trackSemantics?.trackId,
+    })
+    onUpdateSession({ ...session, corners: newCorners, analyses: derived.analyses, trackSemantics: derived.trackSemantics })
     setIsAddingCorner(false)
   }, [session, fastestLap.id, onUpdateSession])
 
   const handleDeleteCorner = useCallback((cornerId: number) => {
     const newCorners = session.corners.filter(c => c.id !== cornerId)
     newCorners.forEach((c, i) => { c.id = i + 1; c.name = `T${i + 1}` })
-    const analyses = session.laps.map(lap => reanalyzeLap(lap, newCorners, fastestLap.points))
-    onUpdateSession({ ...session, corners: newCorners, analyses })
+    const derived = rebuildSessionDerivedData({
+      laps: session.laps,
+      corners: newCorners,
+      startFinishLine: session.startFinishLine,
+      filename: session.filename,
+      date: session.date,
+      trackId: session.trackSemantics?.trackId,
+    })
+    onUpdateSession({ ...session, corners: newCorners, analyses: derived.analyses, trackSemantics: derived.trackSemantics })
   }, [session, onUpdateSession])
 
   const handleCompare = useCallback((lap1Id: number, lap2Id: number) => {

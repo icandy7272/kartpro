@@ -1,4 +1,5 @@
 import type { Corner, Lap, GPSPoint } from '../../../types'
+import { inferTrackSemantics } from '../semantic-inference'
 import type { InferTrackSemanticsArgs } from '../semantic-types'
 
 const BASE_LAT = 31.2304
@@ -247,5 +248,47 @@ export function makeInferenceFixture(): InferTrackSemanticsArgs {
     sourceLapId: referenceLap.id,
     referenceLap,
     corners: makeInferenceCorners(),
+  }
+}
+
+export function makeSessionFixture(): {
+  laps: Lap[]
+  corners: Corner[]
+  startFinishLine?: { lat1: number; lng1: number; lat2: number; lng2: number }
+  filename: string
+  date: Date
+  trackId: string
+  fastestLapId: number
+  previousPendingConfirmations: ReturnType<typeof inferTrackSemantics>['pendingConfirmations']
+} {
+  const referenceLap = makeInferenceReferenceLap()
+  const slowerLap: Lap = {
+    ...referenceLap,
+    id: referenceLap.id + 1,
+    startTime: referenceLap.startTime + 1000,
+    endTime: referenceLap.endTime + 2000,
+    duration: referenceLap.duration + 1,
+    points: referenceLap.points.map((point) => ({
+      ...point,
+      time: point.time + 1000,
+    })),
+  }
+  const corners = makeInferenceCorners()
+  const fastestLapId = referenceLap.id
+  const trackId = 'session-fixture-track'
+
+  return {
+    laps: [referenceLap, slowerLap],
+    corners,
+    filename: 'session-fixture.vbo',
+    date: new Date('2026-03-30T00:00:00Z'),
+    trackId,
+    fastestLapId,
+    previousPendingConfirmations: inferTrackSemantics({
+      trackId,
+      corners,
+      referenceLap,
+      sourceLapId: fastestLapId,
+    }).pendingConfirmations,
   }
 }

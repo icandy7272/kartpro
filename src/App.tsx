@@ -8,11 +8,12 @@ function generateId(): string {
     return (c === 'x' ? r : (r & 0x3) | 0x8).toString(16)
   })
 }
-import type { TrainingSession, AIConfig, LapAnalysis, Lap, Corner, GPSPoint, TrackProfile } from './types'
+import type { TrainingSession, AIConfig, Lap, Corner, GPSPoint, TrackProfile } from './types'
 import { parseGPSFromFile, parseGeoJSONFile } from './lib/gps-parser'
 import { parseVBO } from './lib/vbo-parser'
 import { detectCorners } from './lib/analysis/corner-detection'
 import { analyzeTrack } from './lib/analysis/track-analysis'
+import { rebuildSessionDerivedData } from './lib/analysis/session-derived-data'
 import { findMatchingProfile, saveTrackProfile, calculateCenter } from './lib/track-profiles'
 import { saveSession, getSessionSummaries, getSession, deleteSession, type SessionSummary } from './lib/storage'
 import FileUpload from './components/FileUpload'
@@ -41,18 +42,6 @@ function smoothPoints(points: GPSPoint[], windowSize = 5): GPSPoint[] {
       altitude: sumAlt / count,
     }
   })
-}
-
-function haversineDistance(a: GPSPoint, b: GPSPoint): number {
-  const R = 6371000
-  const dLat = ((b.lat - a.lat) * Math.PI) / 180
-  const dLng = ((b.lng - a.lng) * Math.PI) / 180
-  const lat1 = (a.lat * Math.PI) / 180
-  const lat2 = (b.lat * Math.PI) / 180
-  const sinDLat = Math.sin(dLat / 2)
-  const sinDLng = Math.sin(dLng / 2)
-  const h = sinDLat * sinDLat + Math.cos(lat1) * Math.cos(lat2) * sinDLng * sinDLng
-  return 2 * R * Math.asin(Math.sqrt(h))
 }
 
 function detectStartFinishLine(points: GPSPoint[]): { lat1: number; lng1: number; lat2: number; lng2: number } | null {
@@ -104,155 +93,6 @@ function detectLaps(
   return _detectLapsInterpolated(points, startFinish)
 }
 
-
-/**
- * Create a perpendicular reference line at a given point on the track.
- * Used for apex-based interpolation to get precise crossing times.
- */
-function createApexReferenceLine(
-  refPoints: GPSPoint[],
-  apexIdx: number,
-  widthDeg: number = 0.00005 // ~5 meters
-): { lat1: number; lng1: number; lat2: number; lng2: number } {
-  const idx = Math.min(apexIdx, refPoints.length - 2)
-  const dx = refPoints[Math.min(idx + 1, refPoints.length - 1)].lat - refPoints[Math.max(idx - 1, 0)].lat
-  const dy = refPoints[Math.min(idx + 1, refPoints.length - 1)].lng - refPoints[Math.max(idx - 1, 0)].lng
-  const len = Math.sqrt(dx * dx + dy * dy)
-  if (len < 1e-12) return { lat1: refPoints[idx].lat, lng1: refPoints[idx].lng, lat2: refPoints[idx].lat, lng2: refPoints[idx].lng }
-  // Perpendicular direction
-  const perpLat = (-dy / len) * widthDeg
-  const perpLng = (dx / len) * widthDeg
-  return {
-    lat1: refPoints[idx].lat - perpLat,
-    lng1: refPoints[idx].lng - perpLng,
-    lat2: refPoints[idx].lat + perpLat,
-    lng2: refPoints[idx].lng + perpLng,
-  }
-}
-
-/**
- * Find the interpolated time when a lap's GPS track crosses a reference line.
- * Uses segmentIntersection for sub-sample precision.
- */
-function findCrossingTime(
-  lapPoints: GPSPoint[],
-  refLine: { lat1: number; lng1: number; lat2: number; lng2: number },
-  searchCenter: number,
-  searchRadius: number = 50
-): number | null {
-  const startSearch = Math.max(0, searchCenter - searchRadius)
-  const endSearch = Math.min(lapPoints.length - 2, searchCenter + searchRadius)
-
-  let bestT: number | null = null
-  let bestDist = Infinity
-
-  for (let i = startSearch; i <= endSearch; i++) {
-    const d1x = lapPoints[i + 1].lat - lapPoints[i].lat
-    const d1y = lapPoints[i + 1].lng - lapPoints[i].lng
-    const d2x = refLine.lat2 - refLine.lat1
-    const d2y = refLine.lng2 - refLine.lng1
-    const denom = d1x * d2y - d1y * d2x
-    if (Math.abs(denom) < 1e-15) continue
-    const qpx = refLine.lat1 - lapPoints[i].lat
-    const qpy = refLine.lng1 - lapPoints[i].lng
-    const t = (qpx * d2y - qpy * d2x) / denom
-    const u = (qpx * d1y - qpy * d1x) / denom
-    if (t >= 0 && t <= 1 && u >= 0 && u <= 1) {
-      const dist = Math.abs(i - searchCenter)
-      if (dist < bestDist) {
-        bestDist = dist
-        bestT = lapPoints[i].time + t * (lapPoints[i + 1].time - lapPoints[i].time)
-      }
-    }
-  }
-  return bestT
-}
-
-function analyzeLap(lap: Lap, corners: Corner[], refPoints: GPSPoint[]): LapAnalysis {
-  const lapPoints = lap.points
-
-  // Step 1: Create entry-point reference lines from the reference (fastest) lap
-  // Fixed geographic split points at each corner's entry position
-  const entryRefLines = corners.map((c) => {
-    const entryIdx = Math.min(c.startIndex, refPoints.length - 2)
-    return createApexReferenceLine(refPoints, entryIdx)
-  })
-
-  // Step 2: For each corner, find the matching position in this lap and get speeds
-  const lapCorners: Corner[] = corners.map((c) => {
-    const refMidIdx = Math.min(Math.floor((c.startIndex + c.endIndex) / 2), refPoints.length - 1)
-    const refPoint = refPoints[refMidIdx]
-
-    let bestStart = 0
-    let bestDist = Infinity
-    for (let i = 0; i < lapPoints.length; i++) {
-      const d = haversineDistance(lapPoints[i], refPoint)
-      if (d < bestDist) {
-        bestDist = d
-        bestStart = i
-      }
-    }
-
-    const halfLen = Math.floor((c.endIndex - c.startIndex) / 2)
-    const start = Math.max(0, bestStart - halfLen)
-    const end = Math.min(lapPoints.length - 1, bestStart + halfLen)
-
-    let minSpd = Infinity
-    for (let i = start; i <= end; i++) {
-      minSpd = Math.min(minSpd, lapPoints[i].speed)
-    }
-
-    const entryIdx = Math.max(0, start - 3)
-    const exitIdx = Math.min(lapPoints.length - 1, end + 3)
-
-    return {
-      ...c,
-      startIndex: start,
-      endIndex: end,
-      entrySpeed: lapPoints[entryIdx].speed * 3.6,
-      minSpeed: minSpd * 3.6,
-      exitSpeed: lapPoints[exitIdx].speed * 3.6,
-      duration: 0, // Will be calculated with interpolation below
-    }
-  })
-
-  // Step 3: Calculate sector durations using entry-point reference line crossing
-  // Find interpolated entry crossing times for each corner
-  const entryTimes: (number | null)[] = lapCorners.map((c, ci) => {
-    const searchCenter = c.startIndex
-    return findCrossingTime(lapPoints, entryRefLines[ci], searchCenter)
-  })
-
-  // Sector time: entry[i-1] → entry[i], covering one corner + preceding straight
-  // sector[0] = lap start → entry[0]
-  // sector[i] = entry[i-1] → entry[i]
-  for (let i = 0; i < lapCorners.length; i++) {
-    const currentEntryTime = entryTimes[i]
-    const prevEntryTime = i === 0 ? lap.startTime : entryTimes[i - 1]
-
-    if (currentEntryTime !== null && prevEntryTime !== null) {
-      lapCorners[i].duration = (currentEntryTime - prevEntryTime) / 1000
-    } else {
-      // Fallback to sample-point timing
-      const sectorStart = i === 0 ? 0 : lapCorners[i - 1].startIndex
-      const sectorEnd = lapCorners[i].startIndex
-      if (sectorStart < lapPoints.length && sectorEnd < lapPoints.length) {
-        lapCorners[i].duration = (lapPoints[sectorEnd].time - lapPoints[sectorStart].time) / 1000
-      }
-    }
-  }
-
-  // Remaining time: last entry ref line → lap end (final straight + last corner)
-  const lastEntryTime = entryTimes[entryTimes.length - 1]
-  const remainingTime = lastEntryTime !== null
-    ? (lap.endTime - lastEntryTime) / 1000
-    : 0
-
-  const sectorTimes = lapCorners.map((c) => c.duration)
-
-  return { lap, corners: lapCorners, sectorTimes, remainingTime }
-}
-
 type ProcessingStage = 'idle' | 'parsing' | 'smoothing' | 'detecting-sf' | 'picking-sf' | 'detecting-laps' | 'detecting-corners' | 'analyzing' | 'done'
 
 function App() {
@@ -286,6 +126,13 @@ function App() {
   const refreshHistory = useCallback(() => {
     getSessionSummaries().then(setHistorySessions).catch(() => {})
   }, [])
+
+  const handleUpdateSession = useCallback((updated: TrainingSession | null) => {
+    setCurrentSession(updated)
+    if (updated) {
+      saveSession(updated).then(refreshHistory).catch(() => {})
+    }
+  }, [refreshHistory])
 
   const handleLoadSession = useCallback(async (id: string) => {
     setIsLoading(true)
@@ -446,17 +293,24 @@ function App() {
             }
           })
 
-          // Build session directly, skipping TrackSetup
-          const analyses: LapAnalysis[] = laps.map((lap) => analyzeLap(lap, corners, fastestLap.points))
+          const derived = rebuildSessionDerivedData({
+            laps,
+            corners,
+            startFinishLine: { lat1: sf.lat1, lng1: sf.lng1, lat2: sf.lat2, lng2: sf.lng2 },
+            filename: file.name,
+            date: new Date(laps[0].startTime),
+            trackId: profile?.id ?? file.name,
+          })
 
           const session: TrainingSession = {
             id: generateId(),
             filename: file.name,
             date: new Date(laps[0].startTime),
             laps,
-            analyses,
+            analyses: derived.analyses,
             corners,
             startFinishLine: { lat1: sf.lat1, lng1: sf.lng1, lat2: sf.lat2, lng2: sf.lng2 },
+            trackSemantics: derived.trackSemantics,
           }
 
           setCurrentSession(session)
@@ -520,17 +374,25 @@ function App() {
 
   const handleTrackSetupComplete = useCallback(
     (data: { startFinishLine: { lat1: number; lng1: number; lat2: number; lng2: number }; laps: Lap[]; corners: Corner[]; trackName?: string }) => {
+      const derived = rebuildSessionDerivedData({
+        laps: data.laps,
+        corners: data.corners,
+        startFinishLine: data.startFinishLine,
+        filename: currentFilename,
+        date: new Date(data.laps[0].startTime),
+        trackId: matchedProfile?.id ?? data.trackName ?? currentFilename,
+      })
       const fastestLap = data.laps.reduce((best, lap) => (lap.duration < best.duration ? lap : best), data.laps[0])
-      const analyses: LapAnalysis[] = data.laps.map((lap) => analyzeLap(lap, data.corners, fastestLap.points))
 
       const session: TrainingSession = {
         id: generateId(),
         filename: currentFilename,
         date: new Date(data.laps[0].startTime),
         laps: data.laps,
-        analyses,
+        analyses: derived.analyses,
         corners: data.corners,
         startFinishLine: data.startFinishLine,
+        trackSemantics: derived.trackSemantics,
       }
 
       setCurrentSession(session)
@@ -643,7 +505,7 @@ function App() {
           aiConfig={aiConfig}
           onAiConfigChange={setAiConfig}
           onNewSession={handleNewSession}
-          onUpdateSession={setCurrentSession}
+          onUpdateSession={handleUpdateSession}
         />
       )}
     </div>

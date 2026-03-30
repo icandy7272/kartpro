@@ -1,3 +1,5 @@
+import type { TrackSemanticModel } from '../lib/analysis/semantic-types'
+
 export interface GPSPoint {
   lat: number
   lng: number
@@ -49,6 +51,7 @@ export interface TrainingSession {
   analyses: LapAnalysis[]
   corners: Corner[] // master corner list from fastest lap
   startFinishLine?: { lat1: number; lng1: number; lat2: number; lng2: number }
+  trackSemantics?: TrackSemanticModel
 }
 
 export interface AIMessage {
