@@ -11,7 +11,9 @@ export interface CornerSemantic {
   name: string
   direction: Corner['direction']
   type: Corner['type']
+  // Inclusive lap point index where the corner starts.
   startIndex: number
+  // Inclusive lap point index where the corner ends.
   endIndex: number
   apexIndex: number
 }
@@ -21,7 +23,9 @@ export interface StraightSemantic {
   toCornerId: number
   fromCornerName: string
   toCornerName: string
+  // Straight begins at the previous corner's inclusive end index.
   startIndex: number
+  // Straight ends at the next corner's inclusive start index.
   endIndex: number
   lengthM: number
   wrapsLap: boolean

@@ -20,34 +20,42 @@ function distanceM(a: GPSPoint, b: GPSPoint): number {
   return 2 * EARTH_RADIUS_M * Math.asin(Math.sqrt(h))
 }
 
-function clampIndex(idx: number, n: number): number {
-  if (n === 0) return 0
-  if (idx < 0) return 0
-  if (idx >= n) return n - 1
-  return idx
+function assertIndexInRange(index: number, pointCount: number, label: string): void {
+  if (!Number.isInteger(index)) {
+    throw new Error(`Corner ${label} index must be an integer, got ${index}`)
+  }
+  if (index < 0 || index >= pointCount) {
+    throw new Error(
+      `Corner ${label} index ${index} is out of range for reference lap with ${pointCount} points`,
+    )
+  }
+}
+
+function assertCornerIndicesInRange(corner: Corner, pointCount: number): void {
+  assertIndexInRange(corner.startIndex, pointCount, `${corner.name}.startIndex`)
+  assertIndexInRange(corner.endIndex, pointCount, `${corner.name}.endIndex`)
+  assertIndexInRange(corner.apexIndex, pointCount, `${corner.name}.apexIndex`)
 }
 
 function segmentDistanceCircular(points: GPSPoint[], fromIndex: number, toIndex: number): number {
   const n = points.length
   if (n < 2) return 0
 
-  const from = clampIndex(fromIndex, n)
-  const to = clampIndex(toIndex, n)
-  if (from === to) return 0
+  if (fromIndex === toIndex) return 0
 
   let total = 0
-  if (to > from) {
-    for (let i = from; i < to; i++) {
+  if (toIndex > fromIndex) {
+    for (let i = fromIndex; i < toIndex; i++) {
       total += distanceM(points[i], points[i + 1])
     }
     return total
   }
 
-  for (let i = from; i < n - 1; i++) {
+  for (let i = fromIndex; i < n - 1; i++) {
     total += distanceM(points[i], points[i + 1])
   }
   total += distanceM(points[n - 1], points[0])
-  for (let i = 0; i < to; i++) {
+  for (let i = 0; i < toIndex; i++) {
     total += distanceM(points[i], points[i + 1])
   }
   return total
@@ -70,8 +78,9 @@ export function buildTrackSkeleton(args: {
   referenceLap: Lap
 }): Pick<TrackSemanticModel, 'corners' | 'straights' | 'relationships'> {
   const orderedCorners = [...args.corners].sort((a, b) => a.startIndex - b.startIndex)
+  const pointCount = args.referenceLap.points.length
 
-  if (orderedCorners.length === 0) {
+  if (orderedCorners.length === 0 || pointCount < 2) {
     return {
       corners: [],
       straights: [],
@@ -79,9 +88,22 @@ export function buildTrackSkeleton(args: {
     }
   }
 
+  for (const corner of orderedCorners) {
+    // Contract: corner start/end/apex indices are inclusive references into referenceLap.points.
+    assertCornerIndicesInRange(corner, pointCount)
+  }
+
   const corners = orderedCorners.map(toCornerSemantic)
   const straights: StraightSemantic[] = []
   const relationships: CornerRelationship[] = []
+
+  if (orderedCorners.length < 2) {
+    return {
+      corners,
+      straights: [],
+      relationships: [],
+    }
+  }
 
   for (let i = 0; i < orderedCorners.length; i++) {
     const fromCorner = orderedCorners[i]

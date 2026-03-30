@@ -97,3 +97,18 @@ export function makeSemanticCorners(): Corner[] {
     },
   ]
 }
+
+export function makeSingleSemanticCorner(): Corner[] {
+  return [makeSemanticCorners()[0]]
+}
+
+export function makeOutOfRangeSemanticCorners(): Corner[] {
+  const corners = makeSemanticCorners()
+  return [
+    corners[0],
+    {
+      ...corners[1],
+      startIndex: 999,
+    },
+  ]
+}
