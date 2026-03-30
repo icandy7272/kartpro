@@ -316,15 +316,15 @@ export default function TrackSetup({ points, autoDetected, onComplete, detectLap
   const isCornerStage = stage === 'corners'
 
   return (
-    <div className="min-h-screen flex flex-col">
+    <div className="h-[100dvh] flex flex-col overflow-hidden">
       {/* Header */}
-      <div className="bg-gray-900 border-b border-gray-800 px-6 py-4">
-        <div className="flex items-center justify-between mb-2">
-          <h2 className="text-xl font-bold text-gray-100">
+      <div className="bg-gray-900 border-b border-gray-800 px-3 py-3 sm:px-6 sm:py-4">
+        <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-1 sm:gap-0 mb-2">
+          <h2 className="text-lg sm:text-xl font-bold text-gray-100">
             {isCornerStage ? '赛道设置' : '设置起终点线'}
           </h2>
           {isCornerStage && (
-            <div className="flex items-center gap-3 text-sm text-gray-400">
+            <div className="flex items-center gap-2 sm:gap-3 text-xs sm:text-sm text-gray-400">
               <span className="text-green-400 font-medium">{laps.length} 圈</span>
               <span>|</span>
               <span className="text-purple-400 font-medium">{corners.length} 个弯道</span>
@@ -334,19 +334,19 @@ export default function TrackSetup({ points, autoDetected, onComplete, detectLap
           )}
         </div>
 
-        <p className="text-gray-400 text-sm mb-3">
+        <p className="text-gray-400 text-xs sm:text-sm mb-3">
           {isCornerStage
             ? '检查弯道标记是否正确，可以添加或删除弯道。确认后开始分析。'
             : '在赛道上标记起终点线的位置，用于检测圈数。'}
         </p>
 
         {/* Controls row */}
-        <div className="flex items-center gap-3">
+        <div className="flex items-center gap-2 sm:gap-3">
           {!isCornerStage && (
             <>
               <button
                 onClick={() => setSFMode('auto')}
-                className={`px-4 py-2 rounded-lg text-sm font-medium transition-colors ${
+                className={`px-3 sm:px-4 py-1.5 sm:py-2 rounded-lg text-xs sm:text-sm font-medium transition-colors ${
                   sfMode === 'auto' ? 'bg-purple-600 text-white' : 'bg-gray-800 text-gray-400 hover:text-gray-200'
                 }`}
               >
@@ -354,7 +354,7 @@ export default function TrackSetup({ points, autoDetected, onComplete, detectLap
               </button>
               <button
                 onClick={() => { setSFMode('manual'); setManualPoints([]) }}
-                className={`px-4 py-2 rounded-lg text-sm font-medium transition-colors ${
+                className={`px-3 sm:px-4 py-1.5 sm:py-2 rounded-lg text-xs sm:text-sm font-medium transition-colors ${
                   sfMode === 'manual' ? 'bg-purple-600 text-white' : 'bg-gray-800 text-gray-400 hover:text-gray-200'
                 }`}
               >
@@ -384,11 +384,11 @@ export default function TrackSetup({ points, autoDetected, onComplete, detectLap
       )}
 
       {/* Map */}
-      <div className="flex-1 relative">
+      <div className="flex-1 relative min-h-0">
         <MapContainer
           bounds={bounds || undefined}
           className="h-full w-full"
-          style={{ minHeight: 'calc(100vh - 230px)', cursor: (sfMode === 'manual' && stage === 'sf') || isCornerStage ? 'crosshair' : undefined }}
+          style={{ height: '100%', cursor: (sfMode === 'manual' && stage === 'sf') || isCornerStage ? 'crosshair' : undefined }}
           zoomControl={true}
         >
           <TileLayer
@@ -466,9 +466,9 @@ export default function TrackSetup({ points, autoDetected, onComplete, detectLap
       </div>
 
       {/* Bottom bar */}
-      <div className="bg-gray-900 border-t border-gray-800 px-6 py-4 flex justify-between items-center">
-        <div className="flex items-center gap-4">
-          <div className="text-sm text-gray-500">
+      <div className="bg-gray-900 border-t border-gray-800 px-3 py-3 sm:px-6 sm:py-4 flex flex-col sm:flex-row sm:justify-between sm:items-center gap-3">
+        <div className="flex flex-col sm:flex-row sm:items-center gap-2 sm:gap-4">
+          <div className="text-xs sm:text-sm text-gray-500">
             {!isCornerStage && sfMode === 'auto' && !autoDetected && '未能自动检测起终点线，请尝试手动标记。'}
             {!isCornerStage && sfMode === 'auto' && autoDetected && '自动检测的起终点线以黄色显示。'}
             {!isCornerStage && sfMode === 'manual' && manualPoints.length < 2 && `还需在地图上放置 ${2 - manualPoints.length} 个点。`}
@@ -477,16 +477,16 @@ export default function TrackSetup({ points, autoDetected, onComplete, detectLap
           </div>
           {isCornerStage && (
             <div className="flex items-center gap-2">
-              <label className="text-sm text-gray-400">赛道名称：</label>
+              <label className="text-xs sm:text-sm text-gray-400 shrink-0">赛道名称：</label>
               <input
                 type="text"
                 value={trackName}
                 onChange={(e) => setTrackName(e.target.value)}
-                className="px-3 py-1.5 bg-gray-800 border border-gray-700 rounded-lg text-sm text-gray-200 focus:outline-none focus:border-purple-500 w-40"
+                className="px-3 py-1.5 bg-gray-800 border border-gray-700 rounded-lg text-sm text-gray-200 focus:outline-none focus:border-purple-500 w-full sm:w-40"
                 placeholder="未命名赛道"
               />
               {matchedProfile && (
-                <span className="text-xs text-green-400 ml-1">已匹配已保存赛道</span>
+                <span className="text-xs text-green-400 ml-1 shrink-0">已匹配已保存赛道</span>
               )}
             </div>
           )}
@@ -496,7 +496,7 @@ export default function TrackSetup({ points, autoDetected, onComplete, detectLap
           <button
             onClick={handleConfirmSF}
             disabled={(sfMode === 'auto' && !autoDetected) || (sfMode === 'manual' && manualPoints.length < 2)}
-            className="px-6 py-2 bg-purple-600 hover:bg-purple-500 disabled:bg-gray-700 disabled:text-gray-500 text-white font-medium rounded-lg transition-colors"
+            className="w-full sm:w-auto px-6 py-2.5 sm:py-2 bg-purple-600 hover:bg-purple-500 disabled:bg-gray-700 disabled:text-gray-500 text-white font-medium rounded-lg transition-colors shrink-0"
           >
             下一步：检测弯道 →
           </button>
@@ -505,7 +505,7 @@ export default function TrackSetup({ points, autoDetected, onComplete, detectLap
         {isCornerStage && (
           <button
             onClick={handleComplete}
-            className="px-8 py-2.5 bg-purple-600 hover:bg-purple-500 text-white font-bold rounded-lg transition-colors text-base"
+            className="w-full sm:w-auto px-8 py-2.5 bg-purple-600 hover:bg-purple-500 text-white font-bold rounded-lg transition-colors text-base shrink-0"
           >
             保存赛道并开始分析
           </button>

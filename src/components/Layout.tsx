@@ -318,10 +318,10 @@ export default function Layout({ session, aiConfig, onAiConfigChange, onNewSessi
     }
     return (
       <div className="h-screen flex flex-col overflow-hidden">
-        <div className="bg-gray-900 border-b border-gray-800 px-6 py-3 flex items-center justify-between shrink-0">
-          <div className="flex items-center gap-4">
-            <h1 className="text-lg font-bold text-purple-400">KartPro</h1>
-            <span className="text-sm text-gray-400">圈对比</span>
+        <div className="bg-gray-900 border-b border-gray-800 px-3 sm:px-6 py-2 sm:py-3 flex items-center justify-between shrink-0">
+          <div className="flex items-center gap-2 sm:gap-4">
+            <h1 className="text-base sm:text-lg font-bold text-purple-400">KartPro</h1>
+            <span className="text-xs sm:text-sm text-gray-400">圈对比</span>
           </div>
           <button onClick={handleCloseComparison} className="px-3 py-1.5 bg-gray-800 hover:bg-gray-700 text-gray-300 text-xs rounded-lg">返回</button>
         </div>
@@ -331,27 +331,39 @@ export default function Layout({ session, aiConfig, onAiConfigChange, onNewSessi
   }
 
   return (
-    <div className="h-screen flex flex-col overflow-hidden bg-gray-950">
+    <div className="min-h-screen md:h-screen flex flex-col md:overflow-hidden bg-gray-950">
       {/* Top bar */}
-      <div className="bg-gray-900 border-b border-gray-800 px-4 py-2 flex items-center justify-between shrink-0">
-        <div className="flex items-center gap-4">
-          <h1 className="text-sm font-bold text-purple-400">KartPro</h1>
-          <div className="h-4 w-px bg-gray-700" />
-          <span className="text-xs text-gray-400">{session.filename}</span>
-          <span className="text-xs text-gray-500">{session.laps.length}圈</span>
-          <span className="text-xs text-purple-400 font-medium">最快 {formatTime(fastestLap.duration)}</span>
-        </div>
-        <div className="flex items-center gap-1.5">
-          {!comparisonMode && (
-            <>
-              <input ref={secondaryFileInputRef} type="file" accept=".mp4,.geojson,.vbo,.VBO,text/plain,application/octet-stream,*/*" className="hidden" onChange={(e) => { const file = e.target.files?.[0]; if (file) handleSecondaryFile(file); e.target.value = '' }} />
+      <div className="bg-gray-900 border-b border-gray-800 px-2 sm:px-4 py-1.5 sm:py-2 shrink-0">
+        {!comparisonMode && (
+          <input ref={secondaryFileInputRef} type="file" accept=".mp4,.geojson,.vbo,.VBO,text/plain,application/octet-stream,*/*" className="hidden" onChange={(e) => { const file = e.target.files?.[0]; if (file) handleSecondaryFile(file); e.target.value = '' }} />
+        )}
+        <div className="flex items-center justify-between gap-2">
+          <div className="flex items-center gap-2 sm:gap-4 min-w-0">
+            <h1 className="text-sm font-bold text-purple-400 shrink-0">KartPro</h1>
+            <div className="h-4 w-px bg-gray-700 hidden sm:block" />
+            <span className="text-xs text-gray-400 truncate hidden sm:inline">{session.filename}</span>
+            <span className="text-xs text-gray-500 shrink-0">{session.laps.length}圈</span>
+            <span className="text-xs text-purple-400 font-medium shrink-0">最快 {formatTime(fastestLap.duration)}</span>
+          </div>
+          <div className="hidden sm:flex items-center gap-1.5">
+            {!comparisonMode && (
               <button onClick={() => secondaryFileInputRef.current?.click()} disabled={secondaryProcessing} className="px-2.5 py-1 bg-purple-700 hover:bg-purple-600 disabled:bg-gray-700 text-white text-[11px] rounded-md whitespace-nowrap shrink-0">{secondaryProcessing ? '...' : '导入对比'}</button>
-            </>
+            )}
+            <button onClick={() => exportToPDF({ filename: `KartPro_${session.filename.replace(/\.[^.]+$/, '')}`, title: session.filename, date: session.date.toLocaleDateString() })} className="px-2.5 py-1 bg-gray-800 hover:bg-gray-700 text-gray-300 text-[11px] rounded-md whitespace-nowrap shrink-0">导出</button>
+            <button onClick={() => { const allPoints = session.laps.flatMap(l => l.points); exportToVBO(allPoints, session.filename) }} className="px-2.5 py-1 bg-gray-800 hover:bg-gray-700 text-green-400 text-[11px] rounded-md whitespace-nowrap shrink-0">存VBO</button>
+            <button onClick={() => { setSavedProfiles(getTrackProfiles()); setShowProfileManager(true) }} className="px-2.5 py-1 bg-gray-800 hover:bg-gray-700 text-gray-300 text-[11px] rounded-md whitespace-nowrap shrink-0">赛道</button>
+            <button onClick={onNewSession} className="px-2.5 py-1 bg-gray-800 hover:bg-gray-700 text-gray-300 text-[11px] rounded-md whitespace-nowrap shrink-0">新建</button>
+          </div>
+        </div>
+        {/* Mobile button row */}
+        <div className="flex sm:hidden items-center gap-1 mt-1.5">
+          {!comparisonMode && (
+            <button onClick={() => secondaryFileInputRef.current?.click()} disabled={secondaryProcessing} className="px-2 py-1 bg-purple-700 hover:bg-purple-600 disabled:bg-gray-700 text-white text-[10px] rounded-md whitespace-nowrap shrink-0">{secondaryProcessing ? '...' : '对比'}</button>
           )}
-          <button onClick={() => exportToPDF({ filename: `KartPro_${session.filename.replace(/\.[^.]+$/, '')}`, title: session.filename, date: session.date.toLocaleDateString() })} className="px-2.5 py-1 bg-gray-800 hover:bg-gray-700 text-gray-300 text-[11px] rounded-md whitespace-nowrap shrink-0">导出</button>
-          <button onClick={() => { const allPoints = session.laps.flatMap(l => l.points); exportToVBO(allPoints, session.filename) }} className="px-2.5 py-1 bg-gray-800 hover:bg-gray-700 text-green-400 text-[11px] rounded-md whitespace-nowrap shrink-0">存VBO</button>
-          <button onClick={() => { setSavedProfiles(getTrackProfiles()); setShowProfileManager(true) }} className="px-2.5 py-1 bg-gray-800 hover:bg-gray-700 text-gray-300 text-[11px] rounded-md whitespace-nowrap shrink-0">赛道</button>
-          <button onClick={onNewSession} className="px-2.5 py-1 bg-gray-800 hover:bg-gray-700 text-gray-300 text-[11px] rounded-md whitespace-nowrap shrink-0">新建</button>
+          <button onClick={() => exportToPDF({ filename: `KartPro_${session.filename.replace(/\.[^.]+$/, '')}`, title: session.filename, date: session.date.toLocaleDateString() })} className="px-2 py-1 bg-gray-800 hover:bg-gray-700 text-gray-300 text-[10px] rounded-md whitespace-nowrap shrink-0">导出</button>
+          <button onClick={() => { const allPoints = session.laps.flatMap(l => l.points); exportToVBO(allPoints, session.filename) }} className="px-2 py-1 bg-gray-800 hover:bg-gray-700 text-green-400 text-[10px] rounded-md whitespace-nowrap shrink-0">VBO</button>
+          <button onClick={() => { setSavedProfiles(getTrackProfiles()); setShowProfileManager(true) }} className="px-2 py-1 bg-gray-800 hover:bg-gray-700 text-gray-300 text-[10px] rounded-md whitespace-nowrap shrink-0">赛道</button>
+          <button onClick={onNewSession} className="px-2 py-1 bg-gray-800 hover:bg-gray-700 text-gray-300 text-[10px] rounded-md whitespace-nowrap shrink-0">新建</button>
         </div>
       </div>
 
@@ -409,7 +421,7 @@ export default function Layout({ session, aiConfig, onAiConfigChange, onNewSessi
 
       {/* AI Chat floating panel */}
       {showAIChat && (
-        <div className="fixed inset-y-0 right-0 w-96 z-[9999] bg-gray-900 border-l border-gray-700 shadow-2xl flex flex-col">
+        <div className="fixed inset-y-0 right-0 w-full sm:w-96 z-[9999] bg-gray-900 border-l border-gray-700 shadow-2xl flex flex-col">
           <div className="flex items-center justify-between px-4 py-3 border-b border-gray-800">
             <span className="text-sm font-bold text-gray-200">AI 教练</span>
             <button onClick={() => setShowAIChat(false)} className="text-gray-400 hover:text-gray-200 text-lg">×</button>
@@ -421,14 +433,50 @@ export default function Layout({ session, aiConfig, onAiConfigChange, onNewSessi
       )}
 
       {/* Main layout: Left (map + speed chart) | Right (scrollable cards) */}
-      <div className="flex-1 flex flex-col md:flex-row overflow-hidden">
+      <div className="flex-1 flex flex-col md:flex-row md:overflow-hidden">
 
         {/* Left panel — Lap sidebar + Map + Speed Chart */}
-        <div className="w-full md:w-[45%] h-[50vh] md:h-auto flex flex-col shrink-0 border-b md:border-b-0 md:border-r border-gray-800">
+        <div className="w-full md:w-[45%] md:h-auto flex flex-col shrink-0 border-b md:border-b-0 md:border-r border-gray-800">
+          {/* Mobile: horizontal lap list */}
+          <div className="md:hidden overflow-x-auto border-b border-gray-800 bg-gray-900/50">
+            <div className="flex items-center gap-1 px-2 py-1.5">
+              {session.laps.map((lap) => {
+                const isSelected = selectedLapIds.includes(lap.id)
+                const isFastest = lap.id === fastestLap.id
+                return (
+                  <button
+                    key={lap.id}
+                    onClick={() => {
+                      if (isSelected && selectedLapIds.length > 1) {
+                        setSelectedLapIds(selectedLapIds.filter(id => id !== lap.id))
+                      } else if (!isSelected) {
+                        setSelectedLapIds([...selectedLapIds, lap.id])
+                      }
+                    }}
+                    className={`px-2 py-1 rounded text-[10px] font-mono whitespace-nowrap shrink-0 transition-colors ${
+                      isSelected
+                        ? 'bg-purple-500/20 text-gray-100 border border-purple-500/50'
+                        : 'bg-gray-800 text-gray-400 border border-transparent'
+                    } ${isFastest ? 'ring-1 ring-purple-400/50' : ''}`}
+                  >
+                    {lap.id} {formatTime(lap.duration)}
+                  </button>
+                )
+              })}
+              {selectedLapIds.length === 2 && (
+                <button
+                  onClick={() => handleCompare(selectedLapIds[0], selectedLapIds[1])}
+                  className="px-2 py-1 rounded text-[10px] font-medium bg-purple-600 text-white whitespace-nowrap shrink-0"
+                >
+                  对比
+                </button>
+              )}
+            </div>
+          </div>
           {/* Top: Lap sidebar + Map side by side */}
-          <div className="flex-1 flex min-h-0">
-            {/* Narrow lap sidebar */}
-            <div className="w-[160px] shrink-0 border-r border-gray-800 overflow-y-auto bg-gray-900/50">
+          <div className="h-[280px] sm:h-[320px] md:flex-1 flex min-h-0">
+            {/* Narrow lap sidebar — desktop only */}
+            <div className="hidden md:block w-[160px] shrink-0 border-r border-gray-800 overflow-y-auto bg-gray-900/50">
               <LapList
                 laps={session.laps}
                 fastestLapId={fastestLap.id}
@@ -462,7 +510,7 @@ export default function Layout({ session, aiConfig, onAiConfigChange, onNewSessi
             </div>
           </div>
           {/* Speed chart */}
-          <div className="h-[160px] shrink-0 border-t border-gray-800">
+          <div className="h-[100px] sm:h-[120px] md:h-[160px] shrink-0 border-t border-gray-800">
             <SpeedChart
               analyses={session.analyses}
               selectedLapIds={selectedLapIds}
@@ -473,8 +521,8 @@ export default function Layout({ session, aiConfig, onAiConfigChange, onNewSessi
         </div>
 
         {/* Right panel — Scrollable card grid */}
-        <div className="flex-1 overflow-y-auto p-2 min-h-0">
-          <div className="grid grid-cols-2 gap-2" style={{ alignContent: 'start' }}>
+        <div className="flex-1 md:overflow-y-auto p-2 min-h-0">
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-2" style={{ alignContent: 'start' }}>
 
             {/* Key metrics */}
             <Card>

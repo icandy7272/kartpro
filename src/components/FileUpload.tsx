@@ -81,13 +81,13 @@ export default function FileUpload({ onFileSelect, historySessions, onLoadSessio
 
   return (
     <div
-      className="min-h-screen flex flex-col items-center justify-center p-8 gap-8"
+      className="min-h-screen flex flex-col items-center justify-center px-4 py-6 sm:p-8 gap-6 sm:gap-8"
       onDragOver={handleDragOver}
       onDragLeave={handleDragLeave}
       onDrop={handleDrop}
     >
       <div
-        className={`w-full max-w-2xl rounded-2xl border-2 border-dashed p-16 text-center transition-all duration-200 ${
+        className={`w-full max-w-2xl rounded-2xl border-2 border-dashed px-6 py-10 sm:p-16 text-center transition-all duration-200 ${
           isDragging
             ? 'border-purple-500 bg-purple-500/10 scale-105'
             : 'border-gray-700 bg-gray-900 hover:border-gray-600'
@@ -109,8 +109,8 @@ export default function FileUpload({ onFileSelect, historySessions, onLoadSessio
               />
             </svg>
           </div>
-          <h1 className="text-3xl font-bold text-gray-100 mb-2">KartPro</h1>
-          <p className="text-lg text-purple-400 mb-6">卡丁车圈速分析</p>
+          <h1 className="text-2xl sm:text-3xl font-bold text-gray-100 mb-2">KartPro</h1>
+          <p className="text-base sm:text-lg text-purple-400 mb-6">卡丁车圈速分析</p>
           <p className="text-gray-400 mb-2">
             拖拽文件到这里
           </p>
@@ -152,7 +152,7 @@ export default function FileUpload({ onFileSelect, historySessions, onLoadSessio
             {historySessions.map((s) => (
               <div
                 key={s.id}
-                className="flex items-center gap-4 bg-gray-900 border border-gray-700 rounded-lg px-5 py-3 hover:border-purple-500/50 transition-colors cursor-pointer group"
+                className="flex items-center gap-3 sm:gap-4 bg-gray-900 border border-gray-700 rounded-lg px-3 sm:px-5 py-3 hover:border-purple-500/50 transition-colors cursor-pointer group"
                 onClick={() => onLoadSession?.(s.id)}
               >
                 <div className="flex-1 min-w-0">
