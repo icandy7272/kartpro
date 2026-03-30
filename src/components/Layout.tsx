@@ -8,6 +8,12 @@ import { parseGeoJSONFile, parseGPSFromFile } from '../lib/gps-parser'
 import { parseVBO } from '../lib/vbo-parser'
 import { detectLaps } from '../lib/analysis/lap-detection'
 import { rebuildSessionDerivedData } from '../lib/analysis/session-derived-data'
+import {
+  confirmSemanticTag,
+  overrideSemanticTag,
+  rejectSemanticTag,
+  skipSemanticTag,
+} from '../lib/analysis/semantic-actions'
 import { exportToPDF } from '../lib/pdf-export'
 import { exportToVBO } from '../lib/vbo-export'
 import TrackMap from './TrackMap'
@@ -18,7 +24,9 @@ import AICoach from './AICoach'
 import ComparisonReport from './ComparisonReport'
 import AnalysisReport from './AnalysisReport'
 import RacingLineReport from './RacingLineReport'
+import SemanticConfirmationPanel from './SemanticConfirmationPanel'
 import type { RacingLineAnalysis } from '../types'
+import type { SemanticTagType, TrackSemanticModel } from '../lib/analysis/semantic-types'
 
 interface LayoutProps {
   session: TrainingSession
@@ -165,13 +173,46 @@ export default function Layout({ session, aiConfig, onAiConfigChange, onNewSessi
   const fullAnalysis = useMemo(() => {
     const laps = session.analyses.map((a) => a.lap)
     const corners = session.analyses[0]?.corners ?? []
-    return generateFullAnalysis(laps, corners, session.analyses, racingLineAnalyses)
-  }, [session.analyses, racingLineAnalyses])
+    return generateFullAnalysis(
+      laps,
+      corners,
+      session.analyses,
+      session.trackSemantics,
+      racingLineAnalyses,
+    )
+  }, [session.analyses, session.trackSemantics, racingLineAnalyses])
 
   // Current racing line analysis for selected comparison lap
   const currentRLA = useMemo(() => {
     return racingLineAnalyses.find(r => r.comparisonLapId === comparisonLapId) ?? null
   }, [racingLineAnalyses, comparisonLapId])
+
+  const applySemanticModel = useCallback((nextTrackSemantics: TrackSemanticModel) => {
+    onUpdateSession({
+      ...session,
+      trackSemantics: nextTrackSemantics,
+    })
+  }, [session, onUpdateSession])
+
+  const handleConfirmSemantic = useCallback((confirmationId: string) => {
+    if (!session.trackSemantics) return
+    applySemanticModel(confirmSemanticTag(session.trackSemantics, confirmationId))
+  }, [session.trackSemantics, applySemanticModel])
+
+  const handleRejectSemantic = useCallback((confirmationId: string) => {
+    if (!session.trackSemantics) return
+    applySemanticModel(rejectSemanticTag(session.trackSemantics, confirmationId))
+  }, [session.trackSemantics, applySemanticModel])
+
+  const handleOverrideSemantic = useCallback((confirmationId: string, tagType: SemanticTagType) => {
+    if (!session.trackSemantics) return
+    applySemanticModel(overrideSemanticTag(session.trackSemantics, confirmationId, tagType))
+  }, [session.trackSemantics, applySemanticModel])
+
+  const handleSkipSemantic = useCallback((confirmationId: string) => {
+    if (!session.trackSemantics) return
+    applySemanticModel(skipSemanticTag(session.trackSemantics, confirmationId))
+  }, [session.trackSemantics, applySemanticModel])
 
   const handleAddCorner = useCallback((lat: number, lng: number) => {
     const fastLap = session.laps.find(l => l.id === fastestLap.id)
@@ -606,6 +647,18 @@ export default function Layout({ session, aiConfig, onAiConfigChange, onNewSessi
                 fastestLapId={fastestLap.id}
               />
             </Card>
+
+            {session.trackSemantics?.pendingConfirmations.length ? (
+              <div className="col-span-2">
+                <SemanticConfirmationPanel
+                  confirmations={session.trackSemantics.pendingConfirmations}
+                  onConfirm={handleConfirmSemantic}
+                  onReject={handleRejectSemantic}
+                  onOverride={handleOverrideSemantic}
+                  onSkip={handleSkipSemantic}
+                />
+              </div>
+            ) : null}
 
             {/* === Comparison cards — only shown when a non-fastest lap is selected === */}
             {hasComparison && currentRLA && (
