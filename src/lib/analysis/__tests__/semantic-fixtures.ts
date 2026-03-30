@@ -1,5 +1,6 @@
 import type { Corner, Lap, GPSPoint } from '../../../types'
 import { inferTrackSemantics } from '../semantic-inference'
+import { rebuildSessionDerivedData } from '../session-derived-data'
 import type { InferTrackSemanticsArgs } from '../semantic-types'
 
 const BASE_LAT = 31.2304
@@ -290,5 +291,64 @@ export function makeSessionFixture(): {
       referenceLap,
       sourceLapId: fastestLapId,
     }).pendingConfirmations,
+  }
+}
+
+export function makeCoachingFixture(): {
+  laps: Lap[]
+  corners: Corner[]
+  analyses: ReturnType<typeof rebuildSessionDerivedData>['analyses']
+  semanticModel: NonNullable<ReturnType<typeof rebuildSessionDerivedData>['trackSemantics']>
+} {
+  const fixture = makeSessionFixture()
+  const rebuilt = rebuildSessionDerivedData(fixture)
+
+  if (!rebuilt.trackSemantics) {
+    throw new Error('Expected coaching fixture to produce a semantic model')
+  }
+
+  const compoundCandidate = rebuilt.trackSemantics.pendingConfirmations.find(
+    (candidate) =>
+      candidate.tagType === 'compound-corner' &&
+      candidate.targetCornerIds[0] === 5 &&
+      candidate.targetCornerIds[1] === 6,
+  )
+
+  if (!compoundCandidate) {
+    throw new Error('Expected coaching fixture to include a T5/T6 compound confirmation candidate')
+  }
+
+  return {
+    laps: fixture.laps,
+    corners: fixture.corners,
+    analyses: rebuilt.analyses,
+    semanticModel: {
+      ...rebuilt.trackSemantics,
+      semanticTags: [
+        ...rebuilt.trackSemantics.semanticTags,
+        {
+          id: 'must-hit-exit:4',
+          tagType: 'must-hit-exit',
+          targetCornerIds: [4],
+          confidence: 0.88,
+          reasonCodes: ['EXIT_SPEED_PROPAGATES'],
+          explanation: 'T4 should be treated as an exit-priority corner in this fixture.',
+          status: 'confirmed-active',
+        },
+        {
+          id: compoundCandidate.id,
+          tagType: compoundCandidate.tagType,
+          targetCornerIds: compoundCandidate.targetCornerIds,
+          confidence: 0.82,
+          reasonCodes: ['ADJACENT_SHORT_STRAIGHT', 'LINKED_RHYTHM_PATTERN'],
+          explanation: 'T5 and T6 should be coached as one linked compound corner.',
+          status: 'confirmed-active',
+          sourceTagId: compoundCandidate.id,
+        },
+      ],
+      pendingConfirmations: rebuilt.trackSemantics.pendingConfirmations.filter(
+        (candidate) => candidate.id !== compoundCandidate.id,
+      ),
+    },
   }
 }

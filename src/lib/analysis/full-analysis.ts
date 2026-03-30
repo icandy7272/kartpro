@@ -1,4 +1,6 @@
 import type { Lap, Corner, LapAnalysis, GPSPoint, RacingLineAnalysis } from '../../types'
+import { buildSemanticCoachingContext } from './semantic-coaching'
+import type { TrackSemanticModel } from './semantic-types'
 
 export interface FullAnalysis {
   theoreticalBest: {
@@ -155,12 +157,52 @@ function stdDev(values: number[]): number {
   return Math.sqrt(variance)
 }
 
+function isSemanticModel(
+  value: TrackSemanticModel | RacingLineAnalysis[] | undefined,
+): value is TrackSemanticModel {
+  return Boolean(value && !Array.isArray(value) && 'semanticTags' in value)
+}
+
+function mergeCornerNarratives(
+  baseNarrative: FullAnalysis['cornerNarrative'],
+  semanticNarrative: FullAnalysis['cornerNarrative'],
+): FullAnalysis['cornerNarrative'] {
+  if (semanticNarrative.length === 0) return baseNarrative
+
+  const semanticCommentsByCorner = new Map(
+    semanticNarrative.map((entry) => [entry.corner, entry.comments]),
+  )
+  const mergedNarrative = baseNarrative.map((entry) => ({
+    ...entry,
+    comments: [
+      ...(semanticCommentsByCorner.get(entry.corner) ?? []),
+      ...entry.comments,
+    ],
+  }))
+
+  for (const entry of semanticNarrative) {
+    if (!baseNarrative.some((baseEntry) => baseEntry.corner === entry.corner)) {
+      mergedNarrative.push(entry)
+    }
+  }
+
+  return mergedNarrative
+}
+
 export function generateFullAnalysis(
   laps: Lap[],
   corners: Corner[],
   analyses: LapAnalysis[],
-  racingLineAnalyses?: RacingLineAnalysis[]
+  semanticModelOrRacingLineAnalyses?: TrackSemanticModel | RacingLineAnalysis[],
+  maybeRacingLineAnalyses?: RacingLineAnalysis[],
 ): FullAnalysis {
+  const semanticModel = isSemanticModel(semanticModelOrRacingLineAnalyses)
+    ? semanticModelOrRacingLineAnalyses
+    : undefined
+  const racingLineAnalyses = Array.isArray(semanticModelOrRacingLineAnalyses)
+    ? semanticModelOrRacingLineAnalyses
+    : maybeRacingLineAnalyses
+
   if (analyses.length === 0 || corners.length === 0) {
     return {
       theoreticalBest: { time: 0, savings: 0, perCorner: [] },
@@ -1289,6 +1331,22 @@ export function generateFullAnalysis(
     trainingClosure,
   }
 
+  const semanticCoaching = buildSemanticCoachingContext({
+    corners,
+    analyses,
+    semanticModel,
+    cornerScoring,
+    lapGroups,
+  })
+  const finalTrackStrategy =
+    semanticCoaching.trackStrategy.cornerRoles.length > 0
+      ? semanticCoaching.trackStrategy
+      : trackStrategy
+  const finalCornerNarrative = mergeCornerNarratives(
+    cornerNarrative,
+    semanticCoaching.cornerNarrative,
+  )
+
   return {
     theoreticalBest: {
       time: theoreticalBestTime,
@@ -1316,7 +1374,7 @@ export function generateFullAnalysis(
     cornerCorrelation,
     trainingPlan,
     cornerScoring,
-    cornerNarrative,
-    trackStrategy,
+    cornerNarrative: finalCornerNarrative,
+    trackStrategy: finalTrackStrategy,
   }
 }
