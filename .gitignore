@@ -23,3 +23,8 @@ dist-ssr
 *.sln
 *.sw?
 .gstack/
+
+.claude/worktrees/
+.claude/plans/
+.superpowers/
+docs/superpowers/
