@@ -1,4 +1,4 @@
-import type { Lap, Corner, LapAnalysis, GPSPoint } from '../../types'
+import type { Lap, Corner, LapAnalysis, GPSPoint, RacingLineAnalysis } from '../../types'
 
 export interface FullAnalysis {
   theoreticalBest: {
@@ -99,6 +99,35 @@ export interface FullAnalysis {
     corner: string
     comments: string[]
   }[]
+  trackStrategy: {
+    overallApproach: string
+    cornerRoles: {
+      corner: string
+      role: string  // '直道入口弯' | '组合弯' | '独立弯'
+      nextGapM: number
+      prevGapM: number
+      followedByLongStraight: boolean
+      linkedToNext: boolean
+      linkedToPrev: boolean
+      nextCorner: string | null
+      prevCorner: string | null
+      sameDirectionAsNext: boolean
+    }[]
+    priorityZones: {
+      zone: string
+      corners: string[]
+      symptom: string
+      rootCause: string
+      practice: string
+      targetGain: string
+      priority: number
+    }[]
+    trainingClosure: {
+      focus: string
+      metric: string
+      target: string
+    }[]
+  }
 }
 
 /**
@@ -129,7 +158,8 @@ function stdDev(values: number[]): number {
 export function generateFullAnalysis(
   laps: Lap[],
   corners: Corner[],
-  analyses: LapAnalysis[]
+  analyses: LapAnalysis[],
+  racingLineAnalyses?: RacingLineAnalysis[]
 ): FullAnalysis {
   if (analyses.length === 0 || corners.length === 0) {
     return {
@@ -144,6 +174,7 @@ export function generateFullAnalysis(
       trainingPlan: [],
       cornerScoring: [],
       cornerNarrative: [],
+      trackStrategy: { overallApproach: '', cornerRoles: [], priorityZones: [], trainingClosure: [] },
     }
   }
 
@@ -728,9 +759,111 @@ export function generateFullAnalysis(
     })
   }
 
-  // === 11. Expert Coaching Narrative (世界级赛车教练建议) ===
+  // === 11. Track Strategy Model — inter-corner context ===
+
+  // Compute inter-corner gaps using GPS distances on fastest lap
+  const cornerRoles: FullAnalysis['trackStrategy']['cornerRoles'] = []
+  const pts = fastestLap.points
+
+  for (let ci = 0; ci < numCorners; ci++) {
+    const mc = corners[ci]
+    const nextCorner = ci < numCorners - 1 ? corners[ci + 1] : null
+    const prevCorner = ci > 0 ? corners[ci - 1] : null
+
+    // Distance to next corner (from this corner's exit to next corner's entry)
+    let nextGapM = 0
+    if (nextCorner) {
+      nextGapM = cornerDistance(pts, mc.endIndex, nextCorner.startIndex)
+    } else {
+      // Last corner → wrap to lap end + start → first corner
+      nextGapM = cornerDistance(pts, mc.endIndex, pts.length - 1)
+      if (corners[0]) {
+        nextGapM += cornerDistance(pts, 0, corners[0].startIndex)
+      }
+    }
+
+    let prevGapM = 0
+    if (prevCorner) {
+      prevGapM = cornerDistance(pts, prevCorner.endIndex, mc.startIndex)
+    } else {
+      // First corner from start/finish
+      prevGapM = cornerDistance(pts, 0, mc.startIndex)
+    }
+
+    const linkedToNext = nextGapM < 30
+    const linkedToPrev = prevGapM < 30
+    const followedByLongStraight = nextGapM > 80
+
+    // Direction comparison with next corner
+    const sameDirectionAsNext = nextCorner
+      ? mc.direction === nextCorner.direction
+      : false
+
+    // Classify strategic role
+    let role: string
+    if (followedByLongStraight) {
+      role = '直道入口弯'
+    } else if (linkedToNext || linkedToPrev) {
+      role = '组合弯'
+    } else {
+      role = '独立弯'
+    }
+
+    cornerRoles.push({
+      corner: mc.name,
+      role,
+      nextGapM: Math.round(nextGapM),
+      prevGapM: Math.round(prevGapM),
+      followedByLongStraight,
+      linkedToNext,
+      linkedToPrev,
+      nextCorner: nextCorner?.name ?? null,
+      prevCorner: prevCorner?.name ?? null,
+      sameDirectionAsNext,
+    })
+  }
+
+  // Generate overall track approach
+  const entryCorners = cornerRoles.filter(r => r.followedByLongStraight)
+  const linkedGroups: string[][] = []
+  let currentGroup: string[] = []
+  for (let ci = 0; ci < numCorners; ci++) {
+    const cr = cornerRoles[ci]
+    if (cr.linkedToNext || cr.linkedToPrev) {
+      if (currentGroup.length === 0 || cr.linkedToPrev) {
+        if (currentGroup.length === 0) currentGroup.push(cr.corner)
+        else if (cr.linkedToPrev) currentGroup.push(cr.corner)
+      }
+      if (!cr.linkedToNext && currentGroup.length > 0) {
+        linkedGroups.push([...currentGroup])
+        currentGroup = []
+      }
+    } else if (currentGroup.length > 0) {
+      linkedGroups.push([...currentGroup])
+      currentGroup = []
+    }
+  }
+  if (currentGroup.length > 0) linkedGroups.push(currentGroup)
+
+  const approachParts: string[] = []
+  if (entryCorners.length > 0) {
+    approachParts.push(`关键出弯：${entryCorners.map(c => c.corner).join('、')} 后接长直道，出弯速度决定直道尾速`)
+  }
+  if (linkedGroups.length > 0) {
+    approachParts.push(`组合弯：${linkedGroups.map(g => g.join('→')).join('，')}，要当作整体来走`)
+  }
+  const independentCorners = cornerRoles.filter(r => r.role === '独立弯')
+  if (independentCorners.length > 0) {
+    approachParts.push(`独立弯：${independentCorners.map(c => c.corner).join('、')}`)
+  }
+  const overallApproach = approachParts.length > 0
+    ? `本赛道 ${numCorners} 个弯道。${approachParts.join('。')}。核心思路：出弯速度优先于入弯速度，组合弯看整体不看单弯。`
+    : `本赛道共 ${numCorners} 个弯道。`
+
+  // === 12. Expert Coaching Narrative (with track strategy context) ===
   const maxQSGapCorner = sortedByQSGap.length > 0 ? sortedByQSGap[0] : null
 
+  // Use quick-lap-group averages for baseline instead of a single fastest lap
   const cornerNarrative: FullAnalysis['cornerNarrative'] = []
   for (let ci = 0; ci < numCorners; ci++) {
     const cName = corners[ci].name
@@ -738,78 +871,259 @@ export function generateFullAnalysis(
     const scoring = cornerScoring.find((s) => s.corner === cName)
     const lgCorner = lapGroupsPerCorner.find((l) => l.corner === cName)
     const braking = brakingPattern.find((b) => b.corner === cName)
+    const cr = cornerRoles[ci]
     if (!scoring || !braking) continue
 
     const comments: string[] = []
-    const dir = braking.direction === '左' ? '左' : '右'
-    const angle = braking.angle
+    const dir = mc.direction === 'left' ? '左' : '右'
+    const angle = Math.round(mc.angle)
 
-    // ---- 刹车建议 ----
+    // ---- Identify the ONE dominant issue for this corner ----
     const isTimeLossCorner = scoring.avgDelta > 0.05
-    if (braking.brakingIntensity > 15) {
-      comments.push(`🛑 刹车：制动力度过大（减速 ${Math.round(braking.brakingIntensity)} km/h）。尝试更早、更轻地收油，用拖刹（trail braking）代替急刹，保持前轮载荷的同时逐步转向。`)
-    } else if (braking.brakingIntensity > 8) {
-      if (lgCorner && lgCorner.quickSpeeds.entry > lgCorner.slowSpeeds.entry + 3) {
-        comments.push(`🛑 刹车：慢圈入弯速度偏低（${Math.round(lgCorner.slowSpeeds.entry)} km/h vs 快圈 ${Math.round(lgCorner.quickSpeeds.entry)} km/h），刹车点可以再晚 1-2 米。`)
-      } else if (isTimeLossCorner) {
-        comments.push(`🛑 刹车：制动 ${Math.round(braking.brakingIntensity)} km/h，但该弯仍有掉时（平均 +${scoring.avgDelta.toFixed(2)}s），检查刹车时机和力度的一致性。`)
+    const isUnstable = scoring.stdDev > 0.4
+    const exitDecelerating = braking.exitAcceleration < -2
+    const poorExitAccel = braking.exitAcceleration < 2
+    const heavyBraking = braking.brakingIntensity > 15
+    const entryConstrained = cr.linkedToPrev && braking.brakingIntensity < 3
+
+    // ---- 赛道上下文（组合弯关系）----
+    if (cr.linkedToPrev && cr.prevCorner) {
+      const prevBraking = brakingPattern.find(b => b.corner === cr.prevCorner)
+      if (prevBraking) {
+        const speedRecovery = braking.entrySpeed - prevBraking.exitSpeed
+        if (Math.abs(speedRecovery) < 5) {
+          comments.push(`🔗 组合弯：紧接 ${cr.prevCorner} 出弯（间距仅 ${cr.prevGapM}m），入弯速度取决于 ${cr.prevCorner} 的出弯质量。两弯要当作一个整体来规划走线。`)
+        } else if (speedRecovery < -5) {
+          comments.push(`🔗 组合弯：${cr.prevCorner} 出弯后到本弯入弯掉了 ${Math.round(Math.abs(speedRecovery))} km/h，间距 ${cr.prevGapM}m。过渡段可能存在不必要的减速或犹豫。`)
+        }
       }
-    } else if (braking.brakingIntensity < 3) {
-      // Low braking — could be good (high-speed bend) or bad (too slow entry)
-      if (braking.entrySpeed < 45 && angle > 60) {
-        comments.push(`🛑 刹车：入弯速度仅 ${Math.round(braking.entrySpeed)} km/h，不需要刹车可能是因为前段加速不足。检查上一个弯的出弯加速和直道尾速是否到位。`)
-      } else if (isTimeLossCorner) {
-        comments.push(`🛑 刹车：几乎不刹车但仍在掉时（+${scoring.avgDelta.toFixed(2)}s），问题可能不在刹车，而在走线或出弯油门。`)
-      }
-    }
-    // Always add entry speed comparison if there's a gap
-    if (lgCorner && lgCorner.quickSpeeds.entry > lgCorner.slowSpeeds.entry + 5 && braking.brakingIntensity <= 8) {
-      comments.push(`🛑 入弯速度差距大：快圈 ${Math.round(lgCorner.quickSpeeds.entry)} km/h vs 慢圈 ${Math.round(lgCorner.slowSpeeds.entry)} km/h。速度差 ${Math.round(lgCorner.quickSpeeds.entry - lgCorner.slowSpeeds.entry)} km/h 说明慢圈在进入该弯前就已经落后。`)
     }
 
-    // ---- 转向建议（基于弯心位置和弯道类型）----
+    if (cr.linkedToNext && cr.nextCorner) {
+      if (cr.sameDirectionAsNext) {
+        comments.push(`🔗 同向组合：本弯与 ${cr.nextCorner} 同为${dir}弯且间距仅 ${cr.nextGapM}m，考虑用双弯心走法——不必在两弯之间加速，保持弧线连贯。`)
+      } else {
+        comments.push(`🔗 反向组合（S弯）：本弯 → ${cr.nextCorner} 方向相反，间距 ${cr.nextGapM}m。关键是本弯出弯走线为下一弯的入弯做好准备——出弯时将车挪到 ${cr.nextCorner} 的入弯外侧。`)
+      }
+    }
+
+    if (cr.followedByLongStraight) {
+      comments.push(`🏁 直道入口弯：后方直道约 ${cr.nextGapM}m。出弯速度每多 1 km/h，直道尾速可能多 2-3 km/h。这个弯的出弯质量比入弯速度重要得多——宁可入弯慢一点，换取更早补油和更高出弯速度。`)
+    }
+
+    // ---- 核心问题诊断（抓主因，不堆评论）----
+    if (exitDecelerating) {
+      // 最严重的问题：出弯还在减速
+      comments.push(`🛑 核心问题——出弯减速：出弯 ${Math.round(braking.exitSpeed)} km/h < 弯心 ${Math.round(braking.minSpeed)} km/h。过了弯心仍在减速，通常是因为弯心切入太早，出弯段车头没朝向直道方向，被迫继续转向无法给油。`)
+      if (braking.apexPosition === '早弯心') {
+        comments.push(`→ 根因：弯心偏早（${braking.brakingPhaseRatio}%）。练法：推迟转向点，入弯时先走外线，让弯心位置延后到 55-65% 区间。目标是弯心后立刻感觉车头已经朝向出弯方向。`)
+      } else {
+        comments.push(`→ 练法：入弯时多等 1 秒再转向，让车身转到正确角度后再上油。用"视线引导"——过弯心后眼睛立即看出弯口。`)
+      }
+    } else if (isUnstable) {
+      // 稳定性差——先一致再追速度
+      comments.push(`⚠️ 核心问题——不稳定：该弯标准差 ${scoring.stdDev.toFixed(2)}s，波动过大。先不追快，而是建立稳定性。`)
+      comments.push(`→ 练法：选一个固定的刹车参考点（路面标记或路缘石位置），连续 5 圈用完全相同的刹车点和转向点。目标：波动降到 ${(scoring.stdDev * 0.5).toFixed(2)}s 以内。`)
+    } else if (heavyBraking && isTimeLossCorner) {
+      // 重刹但掉时
+      comments.push(`🛑 核心问题——制动过重：减速 ${Math.round(braking.brakingIntensity)} km/h，平均掉时 +${scoring.avgDelta.toFixed(2)}s。`)
+      if (lgCorner && lgCorner.quickSpeeds.entry > lgCorner.slowSpeeds.entry + 3) {
+        comments.push(`→ 快圈入弯 ${Math.round(lgCorner.quickSpeeds.entry)} km/h vs 慢圈 ${Math.round(lgCorner.slowSpeeds.entry)} km/h。根因：慢圈刹车太早或太重。练法：用拖刹（trail braking）代替一脚急刹——在转向的同时逐渐释放刹车，利用重心前移增加前轮抓地力。`)
+      } else {
+        comments.push(`→ 练法：将刹车分两段——先重刹降低初始速度，再用拖刹带入弯心。关键是在转向开始时仍然保持轻微刹车压力，利用载荷转移让前轮获得更多抓地力。`)
+      }
+    } else if (poorExitAccel && isTimeLossCorner) {
+      // 出弯加速不足
+      if (cr.followedByLongStraight) {
+        comments.push(`⚡ 核心问题——出弯加速弱（仅 +${Math.round(braking.exitAcceleration)} km/h），且后接 ${cr.nextGapM}m 直道。这里每丢 1 km/h 出弯速度，整条直道都在掉时。`)
+      } else {
+        comments.push(`⚡ 核心问题——出弯加速不足（仅 +${Math.round(braking.exitAcceleration)} km/h），平均掉时 +${scoring.avgDelta.toFixed(2)}s。`)
+      }
+      if (lgCorner && lgCorner.quickSpeeds.exit > lgCorner.slowSpeeds.exit + 3) {
+        comments.push(`→ 快圈出弯 ${Math.round(lgCorner.quickSpeeds.exit)} km/h vs 慢圈 ${Math.round(lgCorner.slowSpeeds.exit)} km/h。练法：过了弯心后视线立刻看出弯口，逐步开方向盘的同时逐步加油。目标出弯速度 ≥ ${Math.round(lgCorner.quickSpeeds.exit)} km/h。`)
+      } else {
+        comments.push(`→ 练法：弯心后立即开始渐进上油——先给 30% 油门，感觉前轮不再打滑后加到全油。关键是"开方向盘和上油同步"。`)
+      }
+    } else if (entryConstrained && isTimeLossCorner) {
+      // 入弯受限于前一个弯
+      comments.push(`🔗 核心问题——入弯速度受限：入弯 ${Math.round(braking.entrySpeed)} km/h 且几乎不刹车，说明速度瓶颈在上一弯（${cr.prevCorner}）的出弯。优先改善 ${cr.prevCorner} 的出弯加速。`)
+    } else if (isTimeLossCorner) {
+      // 一般性掉时
+      comments.push(`📊 该弯平均掉时 +${scoring.avgDelta.toFixed(2)}s。`)
+      if (lgCorner && lgCorner.gap > 0.2) {
+        const qEntry = Math.round(lgCorner.quickSpeeds.entry)
+        const sEntry = Math.round(lgCorner.slowSpeeds.entry)
+        const qMin = Math.round(lgCorner.quickSpeeds.min)
+        const sMin = Math.round(lgCorner.slowSpeeds.min)
+        const qExit = Math.round(lgCorner.quickSpeeds.exit)
+        const sExit = Math.round(lgCorner.slowSpeeds.exit)
+        // Find the biggest speed gap phase
+        const entryGap = qEntry - sEntry
+        const minGap = qMin - sMin
+        const exitGap = qExit - sExit
+        const maxGap = Math.max(entryGap, minGap, exitGap)
+        if (maxGap === entryGap && entryGap > 3) {
+          comments.push(`→ 主要差距在入弯段：快圈 ${qEntry} km/h vs 慢圈 ${sEntry} km/h（差 ${entryGap} km/h）。慢圈刹车偏早或偏重。`)
+        } else if (maxGap === minGap && minGap > 3) {
+          comments.push(`→ 主要差距在弯心：快圈 ${qMin} km/h vs 慢圈 ${sMin} km/h（差 ${minGap} km/h）。慢圈可能走线偏紧或过度转向。`)
+        } else if (maxGap === exitGap && exitGap > 3) {
+          comments.push(`→ 主要差距在出弯：快圈 ${qExit} km/h vs 慢圈 ${sExit} km/h（差 ${exitGap} km/h）。慢圈补油太晚或弯心后仍在修正方向。`)
+        }
+      }
+    }
+
+    // ---- 刹车分析（每弯都输出）----
+    if (braking.brakingIntensity > 15) {
+      if (!heavyBraking || !isTimeLossCorner) {
+        // 核心问题未覆盖时补充重刹说明
+        comments.push(`🛑 刹车：制动力度大（减速 ${Math.round(braking.brakingIntensity)} km/h）。尝试更早、更轻收油，用拖刹（trail braking）代替急刹——在转向同时逐渐释放刹车，利用载荷转移增加前轮抓地力。`)
+      }
+    } else if (braking.brakingIntensity > 8) {
+      const entryInfo = lgCorner
+        ? `（快圈入弯 ${Math.round(lgCorner.quickSpeeds.entry)} km/h / 慢圈 ${Math.round(lgCorner.slowSpeeds.entry)} km/h）`
+        : ''
+      if (lgCorner && lgCorner.quickSpeeds.entry > lgCorner.slowSpeeds.entry + 3) {
+        comments.push(`🛑 刹车：制动 ${Math.round(braking.brakingIntensity)} km/h${entryInfo}。慢圈入弯速度偏低，刹车点可以再晚 1-2 米。用拖刹（trail braking）——转向时逐渐释放刹车，利用载荷转移增加前轮抓地力。`)
+      } else {
+        comments.push(`🛑 刹车：制动 ${Math.round(braking.brakingIntensity)} km/h${entryInfo}。${isTimeLossCorner ? `该弯仍有掉时（+${scoring.avgDelta.toFixed(2)}s），检查刹车时机和力度的一致性。` : '刹车力度适中。'}`)
+      }
+    } else if (braking.brakingIntensity > 3) {
+      comments.push(`🛑 刹车：轻刹（减速 ${Math.round(braking.brakingIntensity)} km/h），入弯 ${Math.round(braking.entrySpeed)} km/h → 弯心 ${Math.round(braking.minSpeed)} km/h。${isTimeLossCorner ? '虽然刹车不重但仍在掉时，问题可能在走线或出弯。' : '速度控制合理。'}`)
+    } else {
+      if (entryConstrained) {
+        comments.push(`🛑 刹车：几乎不刹车（减速仅 ${Math.round(braking.brakingIntensity)} km/h），入弯速度取决于${cr.prevCorner ? ` ${cr.prevCorner} 出弯` : '前段'}。`)
+      } else if (braking.entrySpeed < 45 && angle > 60) {
+        comments.push(`🛑 刹车：入弯速度仅 ${Math.round(braking.entrySpeed)} km/h 且几乎不刹车——可能是前段加速不足，检查上一弯出弯加速和直道尾速。`)
+      } else {
+        comments.push(`🛑 刹车：几乎不制动（减速 ${Math.round(braking.brakingIntensity)} km/h），全速通过。${angle < 30 ? '高速弯不需要重刹。' : '入弯速度控制良好。'}`)
+      }
+    }
+    // 入弯快慢圈速度差距
+    if (lgCorner && lgCorner.quickSpeeds.entry > lgCorner.slowSpeeds.entry + 5) {
+      comments.push(`🛑 入弯速度差距：快圈 ${Math.round(lgCorner.quickSpeeds.entry)} km/h vs 慢圈 ${Math.round(lgCorner.slowSpeeds.entry)} km/h（差 ${Math.round(lgCorner.quickSpeeds.entry - lgCorner.slowSpeeds.entry)} km/h），慢圈在进入该弯前已落后。`)
+    }
+
+    // ---- 转向/走线分析（基于弯道类型和弯心位置）----
     if (angle > 150) {
       // 掉头弯/发卡弯
       if (braking.apexPosition === '早弯心') {
-        comments.push(`🔄 转向：${angle}°${dir}弯（${mc.type}），弯心偏早（${braking.brakingPhaseRatio}%）。掉头弯应该用晚弯心策略——入弯时先走大圈，推迟转向点，让车头在弯心后尽快朝向出弯方向。`)
+        comments.push(`🔄 转向：${angle}°${dir}弯（${mc.type}），弯心偏早（${braking.brakingPhaseRatio}%）。掉头弯应用晚弯心策略——入弯先走大圈，推迟转向点，让车头在弯心后尽快朝向出弯方向。`)
       } else if (braking.apexPosition === '晚弯心') {
-        comments.push(`🔄 转向：${angle}°${dir}弯（${mc.type}），晚弯心（${braking.brakingPhaseRatio}%），走线策略正确。专注保持弯心最低速的稳定性。`)
+        comments.push(`🔄 转向：${angle}°${dir}弯（${mc.type}），晚弯心（${braking.brakingPhaseRatio}%），走线策略正确。专注保持弯心最低速稳定。`)
       } else {
-        comments.push(`🔄 转向：${angle}°${dir}弯（${mc.type}），弯心居中。对于大角度弯，尝试稍微推迟弯心，用"慢进快出"策略换取更好的出弯加速。`)
+        comments.push(`🔄 转向：${angle}°${dir}弯（${mc.type}），弯心居中。大角度弯尝试稍推迟弯心，用"慢进快出"策略换取更好出弯加速。`)
       }
     } else if (angle > 90) {
-      // 中速弯/发卡弯
+      // 中速弯
       if (braking.apexPosition === '早弯心') {
-        comments.push(`🔄 转向：${angle}°${dir}弯，弯心偏早（${braking.brakingPhaseRatio}%）。过早切弯心会导致出弯时车头还没朝向直道，被迫继续转向而无法给油。推迟入弯点 2-3 米。`)
+        comments.push(`🔄 转向：${angle}°${dir}弯，弯心偏早（${braking.brakingPhaseRatio}%）。过早切弯心导致出弯时车头没朝向直道，被迫继续转向无法给油。推迟入弯点 2-3 米。`)
       } else {
         comments.push(`🔄 转向：${angle}°${dir}弯，弯心位置${braking.apexPosition}（${braking.brakingPhaseRatio}%），走线合理。`)
       }
     } else {
       // 高速弯
-      comments.push(`🔄 转向：${angle}°${dir}高速弯，关键是保持平滑的转向输入，避免方向盘的突然修正。目标是一把转向到位，尽量减少转向角度。`)
+      comments.push(`🔄 转向：${angle}°${dir}高速弯，关键是保持平滑转向输入，避免方向盘突然修正。目标是一把转向到位，减少转向角度。`)
     }
 
-    // ---- 油门建议（基于出弯加速）----
-    if (braking.exitAcceleration < -2) {
-      comments.push(`⚡ 油门：出弯仍在减速（出弯 ${Math.round(braking.exitSpeed)} < 弯心 ${Math.round(braking.minSpeed)} km/h）！这是最大的时间杀手。原因通常是 apex 后车头还没朝向直道，被迫继续转向。修正方法：晚入弯 → 晚转向 → 弯心后车头朝直道 → 立刻上油。`)
-    } else if (braking.exitAcceleration < 2) {
-      comments.push(`⚡ 油门：出弯加速不足（仅 +${Math.round(braking.exitAcceleration)} km/h）。过了弯心后应该逐步上油，目标是出弯速度比弯心快 5+ km/h。练习"眼睛看出弯口"——视线提前转向出弯方向，手和脚会自然跟上。`)
+    // ---- 走线分析（来自 racing-line-analysis 模块）----
+    if (racingLineAnalyses && racingLineAnalyses.length > 0) {
+      // Aggregate racing line data across all comparison laps for this corner
+      const cornerLineData = racingLineAnalyses
+        .map(rla => rla.corners.find(c => c.cornerName === cName))
+        .filter((c): c is NonNullable<typeof c> => c != null)
+
+      if (cornerLineData.length > 0) {
+        const lineParts: string[] = []
+
+        // Average lateral deviation across all comparison laps
+        const avgMeanDev = cornerLineData.reduce((s, c) => s + c.meanDeviation, 0) / cornerLineData.length
+        const avgMaxDev = cornerLineData.reduce((s, c) => s + c.maxDeviation, 0) / cornerLineData.length
+        if (Math.abs(avgMeanDev) > 0.3) {
+          lineParts.push(`走线平均偏${avgMeanDev > 0 ? '外' : '内'} ${Math.abs(avgMeanDev).toFixed(1)}m（最大偏差 ${avgMaxDev.toFixed(1)}m）`)
+        } else {
+          lineParts.push(`走线偏差小（平均 ${Math.abs(avgMeanDev).toFixed(1)}m）`)
+        }
+
+        // Brake point comparison: comparison laps vs reference (fastest) lap
+        const brakePtsWithRef = cornerLineData.filter(c => c.brakePoint && c.refBrakePoint)
+        if (brakePtsWithRef.length > 0) {
+          const avgBrakeSpeed = brakePtsWithRef.reduce((s, c) => s + c.brakePoint!.speed, 0) / brakePtsWithRef.length
+          const refBrakeSpeed = brakePtsWithRef[0].refBrakePoint!.speed
+          const avgBrakeIdx = brakePtsWithRef.reduce((s, c) => s + c.brakePoint!.pointIndex, 0) / brakePtsWithRef.length
+          const refBrakeIdx = brakePtsWithRef[0].refBrakePoint!.pointIndex
+          const idxDiff = avgBrakeIdx - refBrakeIdx  // negative = braking earlier than ref
+          if (Math.abs(idxDiff) > 2) {
+            lineParts.push(`刹车点比快圈${idxDiff < 0 ? '早' : '晚'}约 ${Math.abs(Math.round(idxDiff))} 个采样点（刹车速度 ${Math.round(avgBrakeSpeed)} vs 快圈 ${Math.round(refBrakeSpeed)} km/h）`)
+          } else {
+            lineParts.push(`刹车点与快圈一致（${Math.round(avgBrakeSpeed)} km/h）`)
+          }
+        }
+
+        // Throttle point comparison
+        const throttlePtsWithRef = cornerLineData.filter(c => c.throttlePoint && c.refThrottlePoint)
+        if (throttlePtsWithRef.length > 0) {
+          const avgThrottleSpeed = throttlePtsWithRef.reduce((s, c) => s + c.throttlePoint!.speed, 0) / throttlePtsWithRef.length
+          const refThrottleSpeed = throttlePtsWithRef[0].refThrottlePoint!.speed
+          const avgThrottleIdx = throttlePtsWithRef.reduce((s, c) => s + c.throttlePoint!.pointIndex, 0) / throttlePtsWithRef.length
+          const refThrottleIdx = throttlePtsWithRef[0].refThrottlePoint!.pointIndex
+          const idxDiff = avgThrottleIdx - refThrottleIdx  // positive = throttle later than ref
+          if (Math.abs(idxDiff) > 2) {
+            lineParts.push(`补油点比快圈${idxDiff > 0 ? '晚' : '早'}约 ${Math.abs(Math.round(idxDiff))} 个采样点（补油速度 ${Math.round(avgThrottleSpeed)} vs 快圈 ${Math.round(refThrottleSpeed)} km/h）`)
+          } else {
+            lineParts.push(`补油点与快圈一致（${Math.round(avgThrottleSpeed)} km/h）`)
+          }
+        }
+
+        // Curvature consistency
+        const avgConsistency = Math.round(cornerLineData.reduce((s, c) => s + c.curvatureConsistency, 0) / cornerLineData.length)
+        if (avgConsistency < 70) {
+          lineParts.push(`走线曲率一致性仅 ${avgConsistency}%，每圈走线变化大，需要固定走线`)
+        } else if (avgConsistency < 85) {
+          lineParts.push(`走线曲率一致性 ${avgConsistency}%，尚可但有优化空间`)
+        } else {
+          lineParts.push(`走线曲率一致性 ${avgConsistency}%，走线稳定`)
+        }
+
+        comments.push(`🎯 走线：${lineParts.join('。')}。`)
+      }
+    }
+
+    // ---- 油门/出弯分析（每弯都输出）----
+    if (exitDecelerating) {
+      if (!exitDecelerating) {
+        // 核心问题已覆盖，不重复
+      }
+      // 补充快慢圈出弯对比
       if (lgCorner && lgCorner.quickSpeeds.exit > lgCorner.slowSpeeds.exit + 3) {
-        comments.push(`  → 快圈出弯 ${Math.round(lgCorner.quickSpeeds.exit)} km/h vs 慢圈 ${Math.round(lgCorner.slowSpeeds.exit)} km/h，快圈的出弯加速明显更好。`)
+        comments.push(`⚡ 出弯速度对比：快圈 ${Math.round(lgCorner.quickSpeeds.exit)} km/h vs 慢圈 ${Math.round(lgCorner.slowSpeeds.exit)} km/h。`)
+      }
+    } else if (braking.exitAcceleration < 2) {
+      comments.push(`⚡ 油门：出弯加速不足（弯心 ${Math.round(braking.minSpeed)} → 出弯 ${Math.round(braking.exitSpeed)} km/h，仅 +${Math.round(braking.exitAcceleration)} km/h）。过了弯心应逐步上油，目标出弯比弯心快 5+ km/h。练习"眼睛看出弯口"——视线提前转向出弯方向，手和脚自然跟上。`)
+      if (lgCorner && lgCorner.quickSpeeds.exit > lgCorner.slowSpeeds.exit + 3) {
+        comments.push(`⚡ 出弯速度对比：快圈 ${Math.round(lgCorner.quickSpeeds.exit)} km/h vs 慢圈 ${Math.round(lgCorner.slowSpeeds.exit)} km/h，快圈出弯加速明显更好。`)
       }
     } else if (braking.exitAcceleration > 5) {
-      if (isTimeLossCorner) {
-        comments.push(`⚡ 油门：出弯加速不错（+${Math.round(braking.exitAcceleration)} km/h），但该弯仍在掉时。问题可能在入弯段——入弯走线或刹车点需要调整。`)
+      comments.push(`⚡ 油门：出弯加速良好（+${Math.round(braking.exitAcceleration)} km/h，弯心 ${Math.round(braking.minSpeed)} → 出弯 ${Math.round(braking.exitSpeed)} km/h）。${isTimeLossCorner ? '出弯不是问题，掉时可能在入弯段的走线或刹车点。' : ''}${cr.followedByLongStraight ? '直道入口弯，继续保持强出弯加速。' : ''}`)
+      if (lgCorner && lgCorner.quickSpeeds.exit > lgCorner.slowSpeeds.exit + 3) {
+        comments.push(`⚡ 出弯速度对比：快圈 ${Math.round(lgCorner.quickSpeeds.exit)} km/h vs 慢圈 ${Math.round(lgCorner.slowSpeeds.exit)} km/h。`)
       }
     } else {
-      if (isTimeLossCorner) {
-        comments.push(`⚡ 油门：出弯加速一般（+${Math.round(braking.exitAcceleration)} km/h），该弯平均掉时 +${scoring.avgDelta.toFixed(2)}s。尝试更早开始渐进上油。`)
+      comments.push(`⚡ 油门：出弯加速一般（+${Math.round(braking.exitAcceleration)} km/h，弯心 ${Math.round(braking.minSpeed)} → 出弯 ${Math.round(braking.exitSpeed)} km/h）。${isTimeLossCorner ? `该弯平均掉时 +${scoring.avgDelta.toFixed(2)}s，尝试更早开始渐进上油。` : '速度回升正常。'}`)
+      if (lgCorner && lgCorner.quickSpeeds.exit > lgCorner.slowSpeeds.exit + 3) {
+        comments.push(`⚡ 出弯速度对比：快圈 ${Math.round(lgCorner.quickSpeeds.exit)} km/h vs 慢圈 ${Math.round(lgCorner.slowSpeeds.exit)} km/h。`)
       }
     }
 
-    // ---- 一致性/稳定性提醒 ----
+    // ---- 一致性/崩盘提醒 ----
     if (scoring.stdDev > 0.4) {
-      comments.push(`⚠️ 稳定性：该弯波动大（标准差 ${scoring.stdDev.toFixed(2)}s）。先不追求更快，而是每圈用相同的刹车点和转向点，建立肌肉记忆。连续 5 圈控制波动在 0.2s 以内。`)
+      if (!isUnstable) {
+        // 核心问题没有诊断为不稳定（可能有更严重的问题），补充稳定性提醒
+        comments.push(`⚠️ 稳定性：该弯波动大（标准差 ${scoring.stdDev.toFixed(2)}s）。先建立一致性——每圈用相同刹车点和转向点，连续 5 圈控制波动在 0.2s 以内。`)
+      }
+    } else if (scoring.stdDev > 0.15) {
+      comments.push(`⚠️ 稳定性：该弯有一定波动（标准差 ${scoring.stdDev.toFixed(2)}s），注意保持刹车点和转向点的一致性。`)
+    } else {
+      comments.push(`⚠️ 稳定性：该弯一致性好（标准差 ${scoring.stdDev.toFixed(2)}s）。`)
     }
 
     if (scoring.maxSingleLoss > 1.0) {
@@ -822,29 +1136,157 @@ export function generateFullAnalysis(
           if (delta > worstDelta) { worstDelta = delta; worstLap = a.lap.id }
         }
       }
-      comments.push(`⚠️ 第${worstLap}圈在此弯崩盘（丢 ${worstDelta.toFixed(2)}s）。复盘该圈：是入弯速度过高导致跑大？还是注意力分散导致刹车晚了？`)
+      comments.push(`⚠️ 第${worstLap}圈在此弯崩盘（丢 ${worstDelta.toFixed(2)}s）。复盘该圈：入弯速度过高导致跑大？还是注意力分散导致刹车晚了？`)
     }
 
-    // ---- 快慢圈组差异提醒 ----
-    if (lgCorner && lgCorner.gap > 0.3) {
-      const qMin = Math.round(lgCorner.quickSpeeds.min)
-      const sMin = Math.round(lgCorner.slowSpeeds.min)
-      comments.push(`📊 快慢圈对比：慢圈在此弯平均多掉 ${lgCorner.gap.toFixed(2)}s。弯心速度差异 ${qMin} vs ${sMin} km/h${qMin > sMin + 2 ? '，慢圈弯心速度明显偏低，可能是入弯刹车过猛或走线偏内' : ''}。`)
+    // ---- 快慢圈组差异（每弯都输出）----
+    if (lgCorner) {
+      const qEntry = Math.round(lgCorner.quickSpeeds.entry)
+      const sEntry = Math.round(lgCorner.slowSpeeds.entry)
+      const qMin2 = Math.round(lgCorner.quickSpeeds.min)
+      const sMin2 = Math.round(lgCorner.slowSpeeds.min)
+      const qExit2 = Math.round(lgCorner.quickSpeeds.exit)
+      const sExit2 = Math.round(lgCorner.slowSpeeds.exit)
+      if (lgCorner.gap > 0.1) {
+        const details: string[] = []
+        if (qEntry !== sEntry) details.push(`入弯 ${qEntry}/${sEntry}`)
+        if (qMin2 !== sMin2) details.push(`弯心 ${qMin2}/${sMin2}`)
+        if (qExit2 !== sExit2) details.push(`出弯 ${qExit2}/${sExit2}`)
+        comments.push(`📊 快慢圈对比：慢圈在此弯多掉 ${lgCorner.gap.toFixed(2)}s。速度（快/慢 km/h）：${details.join('，')}。${lgCorner.gap > 0.3 && qMin2 > sMin2 + 2 ? '慢圈弯心速度明显偏低，可能入弯刹车过猛或走线偏内。' : ''}`)
+      } else {
+        comments.push(`📊 快慢圈对比：此弯快慢圈差距小（${lgCorner.gap.toFixed(2)}s），表现一致。`)
+      }
     }
 
-    // ---- 总结性建议 ----
+    // ---- ROI 标记 ----
     if (maxQSGapCorner && lgCorner && lgCorner.corner === maxQSGapCorner.corner && maxQSGapCorner.gap > 0.1) {
-      comments.push(`🏆 这是本节训练中 ROI 最高的弯——快慢圈差距最大（${lgCorner.gap.toFixed(2)}s），解决这个弯可以最有效地提升平均圈速。`)
+      comments.push(`🏆 全场最高 ROI 弯——快慢圈差距 ${lgCorner.gap.toFixed(2)}s，改善此弯对圈速提升最大。`)
     }
-    if (scoring.avgDelta < 0.02 && scoring.stdDev < 0.2 && comments.length === 0) {
-      comments.push(`✅ 该弯已经很稳定且接近最佳，当前优先级低。`)
+
+    // ---- 做得好的弯 ----
+    if (scoring.avgDelta < 0.02 && scoring.stdDev < 0.2) {
+      if (comments.length === 0) {
+        comments.push(`✅ 该弯稳定且接近最佳，优先级低。`)
+      }
     }
-    // If no comments were generated (no issues detected), note it explicitly
+
     if (comments.length === 0) {
-      comments.push(`该弯数据暂无明显问题，建议增加圈数采集更多数据后再分析。`)
+      comments.push(`该弯数据暂无明显问题，建议增加圈数采集更多数据。`)
     }
 
     cornerNarrative.push({ corner: cName, comments })
+  }
+
+  // === 13. Priority Zones — top 3 areas of highest ROI ===
+  // Score each corner considering strategic role (exit before straight > linked > standalone)
+  const zoneScoring: { corner: string; zoneScore: number; ci: number }[] = []
+  for (let ci = 0; ci < numCorners; ci++) {
+    const cName = corners[ci].name
+    const scoring2 = cornerScoring.find(s => s.corner === cName)
+    const cr = cornerRoles[ci]
+    if (!scoring2) continue
+
+    let multiplier = 1.0
+    if (cr.followedByLongStraight) multiplier = 1.5  // exit corners are worth more
+    if (cr.linkedToNext || cr.linkedToPrev) multiplier = Math.max(multiplier, 1.2)
+    zoneScoring.push({ corner: cName, zoneScore: scoring2.score * multiplier, ci })
+  }
+  zoneScoring.sort((a, b) => b.zoneScore - a.zoneScore)
+
+  const priorityZones: FullAnalysis['trackStrategy']['priorityZones'] = []
+  const usedCorners = new Set<string>()
+
+  for (const zs of zoneScoring) {
+    if (priorityZones.length >= 3) break
+    if (usedCorners.has(zs.corner)) continue
+
+    const cr = cornerRoles[zs.ci]
+    const scoring2 = cornerScoring.find(s => s.corner === zs.corner)!
+    const lgCorner2 = lapGroupsPerCorner.find(l => l.corner === zs.corner)
+    const braking2 = brakingPattern.find(b => b.corner === zs.corner)
+    if (!braking2) continue
+
+    // Determine zone (include linked corners)
+    const zoneCorners: string[] = [zs.corner]
+    usedCorners.add(zs.corner)
+    if (cr.linkedToNext && cr.nextCorner && !usedCorners.has(cr.nextCorner)) {
+      zoneCorners.push(cr.nextCorner)
+      usedCorners.add(cr.nextCorner)
+    }
+    if (cr.linkedToPrev && cr.prevCorner && !usedCorners.has(cr.prevCorner)) {
+      zoneCorners.unshift(cr.prevCorner)
+      usedCorners.add(cr.prevCorner)
+    }
+
+    const zoneName = zoneCorners.join('→') + (cr.followedByLongStraight ? '→直道' : '')
+
+    // Generate symptom, root cause, practice
+    let symptom = ''
+    let rootCause = ''
+    let practice = ''
+
+    if (braking2.exitAcceleration < -2) {
+      symptom = `出弯减速（${Math.round(braking2.exitSpeed)} < ${Math.round(braking2.minSpeed)} km/h）`
+      rootCause = braking2.apexPosition === '早弯心' ? '弯心偏早，出弯段车头未朝向直道' : '出弯段仍在转向或刹车'
+      practice = '推迟转向点，用晚弯心策略，弯心后视线看出弯口'
+    } else if (scoring2.stdDev > 0.4) {
+      symptom = `波动大（标准差 ${scoring2.stdDev.toFixed(2)}s）`
+      rootCause = '刹车点和转向点不一致'
+      practice = '选固定参考点，连续5圈用相同刹车时机'
+    } else if (lgCorner2 && lgCorner2.gap > 0.2) {
+      const phases = []
+      if (lgCorner2.quickSpeeds.entry - lgCorner2.slowSpeeds.entry > 3) phases.push('入弯')
+      if (lgCorner2.quickSpeeds.min - lgCorner2.slowSpeeds.min > 3) phases.push('弯心')
+      if (lgCorner2.quickSpeeds.exit - lgCorner2.slowSpeeds.exit > 3) phases.push('出弯')
+      symptom = `快慢圈差距 ${lgCorner2.gap.toFixed(2)}s`
+      rootCause = phases.length > 0 ? `慢圈在${phases.join('、')}阶段掉速` : '整体节奏偏慢'
+      practice = phases.includes('出弯') ? '弯心后渐进上油，目标达到快圈出弯速度' : phases.includes('入弯') ? '延迟刹车点，参考快圈入弯速度' : '模仿快圈节奏'
+    } else {
+      symptom = `平均掉时 +${scoring2.avgDelta.toFixed(2)}s`
+      rootCause = '综合表现低于最佳水平'
+      practice = '参考最佳圈走线和节奏'
+    }
+
+    const targetGain = cr.followedByLongStraight
+      ? `弯道可省 ~${scoring2.avgDelta.toFixed(2)}s + 直道尾速收益`
+      : `可省 ~${scoring2.avgDelta.toFixed(2)}s`
+
+    priorityZones.push({
+      zone: zoneName,
+      corners: zoneCorners,
+      symptom,
+      rootCause,
+      practice,
+      targetGain,
+      priority: priorityZones.length + 1,
+    })
+  }
+
+  // === 14. Training Closure ===
+  const trainingClosure: FullAnalysis['trackStrategy']['trainingClosure'] = []
+  if (priorityZones.length > 0) {
+    const topZone = priorityZones[0]
+    trainingClosure.push({
+      focus: `接下来 5 圈专注 ${topZone.zone}`,
+      metric: topZone.symptom.includes('波动') ? '标准差' : topZone.symptom.includes('出弯') ? '出弯速度' : '弯道用时',
+      target: topZone.symptom.includes('波动')
+        ? `波动降到 ${(parseFloat(topZone.symptom.match(/[\d.]+/)?.[0] ?? '0.5') * 0.5).toFixed(2)}s 以内`
+        : `该区域用时稳定在最快圈 +0.1s 以内`,
+    })
+    if (priorityZones.length > 1) {
+      trainingClosure.push({
+        focus: `巩固后换重点到 ${priorityZones[1].zone}`,
+        metric: '弯道用时差异',
+        target: `快慢圈差距缩小 50%`,
+      })
+    }
+  }
+
+  const trackStrategy: FullAnalysis['trackStrategy'] = {
+    overallApproach,
+    cornerRoles,
+    priorityZones,
+    trainingClosure,
   }
 
   return {
@@ -875,5 +1317,6 @@ export function generateFullAnalysis(
     trainingPlan,
     cornerScoring,
     cornerNarrative,
+    trackStrategy,
   }
 }

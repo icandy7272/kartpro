@@ -49,29 +49,11 @@ function generateReport(analyses: LapAnalysis[]): string {
     // Build corner data for table rendering
     const cornerTableData: Array<{ name: string; direction: string; type: string; angle: number; entry: number; min: number; exit: number }> = []
     for (const corner of fastestAnalysis.corners) {
-      const pts = fastest.points
-      let direction = ''
-      let angle = 0
-      if (corner.startIndex < pts.length && corner.endIndex < pts.length) {
-        let totalChange = 0
-        for (let pi = corner.startIndex; pi < Math.min(corner.endIndex, pts.length - 1); pi++) {
-          const b1 = Math.atan2(pts[pi + 1].lng - pts[pi].lng, pts[pi + 1].lat - pts[pi].lat)
-          const prevIdx = Math.max(corner.startIndex, pi - 1)
-          const b0 = Math.atan2(pts[pi].lng - pts[prevIdx].lng, pts[pi].lat - pts[prevIdx].lat)
-          let diff = ((b1 - b0) * 180) / Math.PI
-          while (diff > 180) diff -= 360
-          while (diff < -180) diff += 360
-          totalChange += diff
-        }
-        direction = totalChange < 0 ? '左' : '右'
-        angle = Math.abs(totalChange)
-      }
-      const cornerType = angle > 160 ? '掉头弯' : angle > 120 ? '发卡弯' : angle > 60 ? '中速弯' : angle > 20 ? '高速弯' : '快速变向'
       cornerTableData.push({
         name: corner.name,
-        direction,
-        type: cornerType,
-        angle: Math.round(angle),
+        direction: corner.direction === 'left' ? '左' : '右',
+        type: corner.type,
+        angle: Math.round(corner.angle),
         entry: Math.round(corner.entrySpeed),
         min: Math.round(corner.minSpeed),
         exit: Math.round(corner.exitSpeed),
@@ -314,12 +296,6 @@ export default function AICoach({ analyses, aiConfig, onConfigChange }: AICoachP
 
   const report = useMemo(() => generateReport(analyses), [analyses])
 
-  const fullAnalysis = useMemo(() => {
-    const laps = analyses.map((a) => a.lap)
-    const corners = analyses[0]?.corners ?? []
-    return generateFullAnalysis(laps, corners, analyses)
-  }, [analyses])
-
   const racingLineAnalyses = useMemo((): RacingLineAnalysis[] => {
     if (analyses.length < 2) return []
     const laps = analyses.map((a) => a.lap)
@@ -330,6 +306,12 @@ export default function AICoach({ analyses, aiConfig, onConfigChange }: AICoachP
       .filter((a) => a.lap.id !== fastestLap.id)
       .map((a) => analyzeRacingLine(fastestLap, a.lap, fastestAnalysis, a, corners))
   }, [analyses])
+
+  const fullAnalysis = useMemo(() => {
+    const laps = analyses.map((a) => a.lap)
+    const corners = analyses[0]?.corners ?? []
+    return generateFullAnalysis(laps, corners, analyses, racingLineAnalyses)
+  }, [analyses, racingLineAnalyses])
 
   const fastestLapId = useMemo(() => {
     const laps = analyses.map((a) => a.lap)
@@ -361,6 +343,11 @@ export default function AICoach({ analyses, aiConfig, onConfigChange }: AICoachP
 3. 引用数据时必须准确，直接从下方遥测数据中读取数值
 4. 每个弯道建议格式：先说弯道编号和类型，再说数据发现，最后给具体建议
 5. 用简洁清晰的中文回答，不要使用 Markdown 格式
+
+回答原则：
+1. 先从整条赛道的角度分析，再谈单弯。考虑弯道之间的关系：出弯接直道的弯要强调出弯速度，组合弯要当整体来走。
+2. 抓主因：每个弯道找到一个最核心的问题（出弯减速 > 不稳定 > 重刹 > 出弯加速弱），不要堆砌多个建议。
+3. 用快圈组 vs 慢圈组的对比数据来佐证，而不是只看最快圈。
 
 回答示例格式：
 "T2（右弯发卡弯，约263°）：入弯速度 55 km/h，最低速 36 km/h，出弯速度 43 km/h。入弯到弯心速度下降了 19 km/h，说明刹车太晚或太猛。建议提前 3-5 米开始轻刹，入弯速度控制在 50 km/h 左右，保持弯心速度在 40 km/h 以上。"
