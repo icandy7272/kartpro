@@ -6,6 +6,12 @@ interface AnalysisReportProps {
   analysis: FullAnalysis
 }
 
+const ROLE_LABEL_STYLES: Record<string, string> = {
+  '直道入口弯': 'bg-amber-500/15 text-amber-300 border-amber-500/30',
+  '组合弯': 'bg-cyan-500/15 text-cyan-300 border-cyan-500/30',
+  '独立弯': 'bg-gray-700/40 text-gray-400 border-gray-700',
+}
+
 function InfoTip({ text }: { text: string }) {
   const [visible, setVisible] = useState(false)
   const [tooltipStyle, setTooltipStyle] = useState<React.CSSProperties>({})
@@ -148,6 +154,10 @@ function ScoreBar({ score }: { score: number }) {
   )
 }
 
+function formatCoachComment(comment: string): string {
+  return comment.replace(/^赛道角色：/, '').trim()
+}
+
 /**
  * Mini SVG map showing two corner trajectories overlaid for comparison.
  * Gray = fastest overall lap, Purple = best corner lap.
@@ -245,12 +255,17 @@ function CornerTrajectoryMap({ bestLine, refLine, bestLapId, refLapId, bestSpeed
 export default function AnalysisReport({ analysis }: AnalysisReportProps) {
   const {
     theoreticalBest, fastestVsSlowest, brakingPattern,
-    lapGroups, cornerCorrelation, trainingPlan, cornerScoring, cornerNarrative,
+    lapGroups, cornerCorrelation, trainingPlan, cornerScoring, cornerNarrative, trackStrategy,
   } = analysis
 
   if (theoreticalBest.perCorner.length === 0) {
     return null
   }
+
+  const roleByCorner = new Map(trackStrategy.cornerRoles.map((role) => [role.corner, role]))
+  const priorityZoneByCorner = new Map(
+    trackStrategy.priorityZones.flatMap((zone) => zone.corners.map((corner) => [corner, zone] as const)),
+  )
 
 
   // Lap trend visualization helpers
@@ -613,18 +628,83 @@ export default function AnalysisReport({ analysis }: AnalysisReportProps) {
       {cornerNarrative.length > 0 && (
         <Section title="教练点评" defaultOpen icon="🗣️">
           <div className="space-y-2">
+            {(trackStrategy.overallApproach || trackStrategy.priorityZones.length > 0) && (
+              <div className="bg-gray-900/70 rounded-lg border border-gray-700/40 p-3 space-y-2">
+                {trackStrategy.overallApproach && (
+                  <div>
+                    <div className="text-[10px] uppercase tracking-wide text-purple-300 font-bold mb-1">
+                      赛道策略
+                    </div>
+                    <p className="text-[11px] text-gray-300 leading-relaxed">
+                      {trackStrategy.overallApproach}
+                    </p>
+                  </div>
+                )}
+
+                {trackStrategy.priorityZones.length > 0 && (
+                  <div className="space-y-1.5">
+                    {trackStrategy.priorityZones.map((zone) => (
+                      <div
+                        key={zone.zone}
+                        className="rounded-md border border-gray-800 bg-gray-950/60 px-2.5 py-2"
+                      >
+                        <div className="flex items-center gap-2 flex-wrap">
+                          <span className="text-[10px] font-bold text-purple-300">
+                            重点区 #{zone.priority}
+                          </span>
+                          <span className="text-[11px] font-semibold text-gray-200">
+                            {zone.zone}
+                          </span>
+                        </div>
+                        <p className="text-[10px] text-gray-400 mt-1 leading-relaxed">
+                          现在最该先处理的是这段区域：{zone.symptom}；根子通常在 {zone.rootCause}；训练时先抓 {zone.practice}
+                        </p>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            )}
+
             {cornerNarrative
               .filter((c) => {
                 const scoring = cornerScoring.find((s) => s.corner === c.corner)
-                return scoring && scoring.score > 3
+                const role = roleByCorner.get(c.corner)
+                const hasStrategicRole = role ? role.role !== '独立弯' : false
+                const hasPriorityZone = priorityZoneByCorner.has(c.corner)
+                const hasRoleComment = c.comments.some((comment) => comment.startsWith('赛道角色：'))
+                return (scoring && scoring.score > 3) || hasStrategicRole || hasPriorityZone || hasRoleComment
               })
               .map((c) => (
                 <div key={c.corner} className="bg-gray-900/50 rounded-lg p-3 border border-gray-700/30">
-                  <div className="text-xs font-bold text-gray-200 mb-1.5">{c.corner}</div>
+                  <div className="flex items-center gap-2 mb-1.5 flex-wrap">
+                    <div className="text-xs font-bold text-gray-200">{c.corner}</div>
+                    {roleByCorner.get(c.corner) && (
+                      <span
+                        className={`text-[10px] px-1.5 py-0.5 rounded border ${
+                          ROLE_LABEL_STYLES[roleByCorner.get(c.corner)?.role ?? '独立弯']
+                        }`}
+                      >
+                        {roleByCorner.get(c.corner)?.role}
+                      </span>
+                    )}
+                    {priorityZoneByCorner.get(c.corner) && (
+                      <span className="text-[10px] px-1.5 py-0.5 rounded border bg-purple-500/10 text-purple-300 border-purple-500/30">
+                        重点区 #{priorityZoneByCorner.get(c.corner)?.priority}
+                      </span>
+                    )}
+                  </div>
                   <div className="space-y-1">
                     {c.comments.map((comment, i) => (
-                      <p key={i} className="text-[11px] text-gray-400 pl-2 border-l-2 border-purple-500/50">
-                        {comment}
+                      <p
+                        key={i}
+                        className={`text-[11px] pl-2 border-l-2 ${
+                          comment.startsWith('赛道角色：')
+                            ? 'text-amber-100 border-amber-400/70 bg-amber-500/5 rounded-r-md py-1 pr-2'
+                            : 'text-gray-400 border-purple-500/50'
+                        }`}
+                      >
+                        {formatCoachComment(comment)}
                       </p>
                     ))}
                   </div>

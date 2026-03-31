@@ -7,6 +7,13 @@ import { getTrackProfiles, deleteTrackProfile } from '../lib/track-profiles'
 import { parseGeoJSONFile, parseGPSFromFile } from '../lib/gps-parser'
 import { parseVBO } from '../lib/vbo-parser'
 import { detectLaps } from '../lib/analysis/lap-detection'
+import { rebuildSessionDerivedData } from '../lib/analysis/session-derived-data'
+import {
+  confirmSemanticTag,
+  overrideSemanticTag,
+  rejectSemanticTag,
+  skipSemanticTag,
+} from '../lib/analysis/semantic-actions'
 import { exportToPDF } from '../lib/pdf-export'
 import { exportToVBO } from '../lib/vbo-export'
 import TrackMap from './TrackMap'
@@ -17,7 +24,9 @@ import AICoach from './AICoach'
 import ComparisonReport from './ComparisonReport'
 import AnalysisReport from './AnalysisReport'
 import RacingLineReport from './RacingLineReport'
+import SemanticConfirmationPanel from './SemanticConfirmationPanel'
 import type { RacingLineAnalysis } from '../types'
+import type { SemanticTagType, TrackSemanticModel } from '../lib/analysis/semantic-types'
 
 /** Remove consecutive duplicate GPS points from flatMap lap junctions. */
 function deduplicateForExport(points: GPSPoint[]): GPSPoint[] {
@@ -38,7 +47,7 @@ interface LayoutProps {
   aiConfig: AIConfig | null
   onAiConfigChange: (config: AIConfig | null) => void
   onNewSession: () => void
-  onUpdateSession: (session: TrainingSession) => void
+  onUpdateSession: (session: TrainingSession | null) => void
 }
 
 function formatTime(seconds: number): string {
@@ -178,13 +187,46 @@ export default function Layout({ session, aiConfig, onAiConfigChange, onNewSessi
   const fullAnalysis = useMemo(() => {
     const laps = session.analyses.map((a) => a.lap)
     const corners = session.analyses[0]?.corners ?? []
-    return generateFullAnalysis(laps, corners, session.analyses, racingLineAnalyses)
-  }, [session.analyses, racingLineAnalyses])
+    return generateFullAnalysis(
+      laps,
+      corners,
+      session.analyses,
+      session.trackSemantics,
+      racingLineAnalyses,
+    )
+  }, [session.analyses, session.trackSemantics, racingLineAnalyses])
 
   // Current racing line analysis for selected comparison lap
   const currentRLA = useMemo(() => {
     return racingLineAnalyses.find(r => r.comparisonLapId === comparisonLapId) ?? null
   }, [racingLineAnalyses, comparisonLapId])
+
+  const applySemanticModel = useCallback((nextTrackSemantics: TrackSemanticModel) => {
+    onUpdateSession({
+      ...session,
+      trackSemantics: nextTrackSemantics,
+    })
+  }, [session, onUpdateSession])
+
+  const handleConfirmSemantic = useCallback((confirmationId: string) => {
+    if (!session.trackSemantics) return
+    applySemanticModel(confirmSemanticTag(session.trackSemantics, confirmationId))
+  }, [session.trackSemantics, applySemanticModel])
+
+  const handleRejectSemantic = useCallback((confirmationId: string) => {
+    if (!session.trackSemantics) return
+    applySemanticModel(rejectSemanticTag(session.trackSemantics, confirmationId))
+  }, [session.trackSemantics, applySemanticModel])
+
+  const handleOverrideSemantic = useCallback((confirmationId: string, tagType: SemanticTagType) => {
+    if (!session.trackSemantics) return
+    applySemanticModel(overrideSemanticTag(session.trackSemantics, confirmationId, tagType))
+  }, [session.trackSemantics, applySemanticModel])
+
+  const handleSkipSemantic = useCallback((confirmationId: string) => {
+    if (!session.trackSemantics) return
+    applySemanticModel(skipSemanticTag(session.trackSemantics, confirmationId))
+  }, [session.trackSemantics, applySemanticModel])
 
   const handleAddCorner = useCallback((lat: number, lng: number) => {
     const fastLap = session.laps.find(l => l.id === fastestLap.id)
@@ -216,16 +258,30 @@ export default function Layout({ session, aiConfig, onAiConfigChange, onNewSessi
     newCorners.push(newCorner)
     newCorners.sort((a, b) => a.startIndex - b.startIndex)
     newCorners.forEach((c, i) => { c.id = i + 1; c.name = `T${i + 1}` })
-    const analyses = session.laps.map(lap => reanalyzeLap(lap, newCorners, fastestLap.points))
-    onUpdateSession({ ...session, corners: newCorners, analyses })
+    const derived = rebuildSessionDerivedData({
+      laps: session.laps,
+      corners: newCorners,
+      startFinishLine: session.startFinishLine,
+      filename: session.filename,
+      date: session.date,
+      trackId: session.trackSemantics?.trackId,
+    })
+    onUpdateSession({ ...session, corners: newCorners, analyses: derived.analyses, trackSemantics: derived.trackSemantics })
     setIsAddingCorner(false)
   }, [session, fastestLap.id, onUpdateSession])
 
   const handleDeleteCorner = useCallback((cornerId: number) => {
     const newCorners = session.corners.filter(c => c.id !== cornerId)
     newCorners.forEach((c, i) => { c.id = i + 1; c.name = `T${i + 1}` })
-    const analyses = session.laps.map(lap => reanalyzeLap(lap, newCorners, fastestLap.points))
-    onUpdateSession({ ...session, corners: newCorners, analyses })
+    const derived = rebuildSessionDerivedData({
+      laps: session.laps,
+      corners: newCorners,
+      startFinishLine: session.startFinishLine,
+      filename: session.filename,
+      date: session.date,
+      trackId: session.trackSemantics?.trackId,
+    })
+    onUpdateSession({ ...session, corners: newCorners, analyses: derived.analyses, trackSemantics: derived.trackSemantics })
   }, [session, onUpdateSession])
 
   const handleCompare = useCallback((lap1Id: number, lap2Id: number) => {
@@ -605,6 +661,18 @@ export default function Layout({ session, aiConfig, onAiConfigChange, onNewSessi
                 fastestLapId={fastestLap.id}
               />
             </Card>
+
+            {session.trackSemantics?.pendingConfirmations.length ? (
+              <div className="col-span-2">
+                <SemanticConfirmationPanel
+                  confirmations={session.trackSemantics.pendingConfirmations}
+                  onConfirm={handleConfirmSemantic}
+                  onReject={handleRejectSemantic}
+                  onOverride={handleOverrideSemantic}
+                  onSkip={handleSkipSemantic}
+                />
+              </div>
+            ) : null}
 
             {/* === Comparison cards — only shown when a non-fastest lap is selected === */}
             {hasComparison && currentRLA && (
