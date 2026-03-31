@@ -28,6 +28,20 @@ import SemanticConfirmationPanel from './SemanticConfirmationPanel'
 import type { RacingLineAnalysis } from '../types'
 import type { SemanticTagType, TrackSemanticModel } from '../lib/analysis/semantic-types'
 
+/** Remove consecutive duplicate GPS points from flatMap lap junctions. */
+function deduplicateForExport(points: GPSPoint[]): GPSPoint[] {
+  if (points.length <= 1) return points
+  const result = [points[0]]
+  for (let i = 1; i < points.length; i++) {
+    const prev = points[i - 1]
+    const curr = points[i]
+    if (curr.lat !== prev.lat || curr.lng !== prev.lng || curr.time !== prev.time) {
+      result.push(curr)
+    }
+  }
+  return result
+}
+
 interface LayoutProps {
   session: TrainingSession
   aiConfig: AIConfig | null
@@ -405,7 +419,7 @@ export default function Layout({ session, aiConfig, onAiConfigChange, onNewSessi
             </>
           )}
           <button onClick={() => exportToPDF({ filename: `KartPro_${session.filename.replace(/\.[^.]+$/, '')}`, title: session.filename, date: session.date.toLocaleDateString() })} className="px-2.5 py-1 bg-gray-800 hover:bg-gray-700 text-gray-300 text-[11px] rounded-md whitespace-nowrap shrink-0">导出</button>
-          <button onClick={() => { const allPoints = session.laps.flatMap(l => l.points); exportToVBO(allPoints, session.filename) }} className="px-2.5 py-1 bg-gray-800 hover:bg-gray-700 text-green-400 text-[11px] rounded-md whitespace-nowrap shrink-0">存VBO</button>
+          <button onClick={() => { const allPoints = session.points ?? deduplicateForExport(session.laps.flatMap(l => l.points)); exportToVBO(allPoints, session.filename, session.startFinishLine) }} className="px-2.5 py-1 bg-gray-800 hover:bg-gray-700 text-green-400 text-[11px] rounded-md whitespace-nowrap shrink-0">存VBO</button>
           <button onClick={() => { setSavedProfiles(getTrackProfiles()); setShowProfileManager(true) }} className="px-2.5 py-1 bg-gray-800 hover:bg-gray-700 text-gray-300 text-[11px] rounded-md whitespace-nowrap shrink-0">赛道</button>
           <button onClick={onNewSession} className="px-2.5 py-1 bg-gray-800 hover:bg-gray-700 text-gray-300 text-[11px] rounded-md whitespace-nowrap shrink-0">新建</button>
         </div>

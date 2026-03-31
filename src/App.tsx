@@ -44,6 +44,20 @@ function smoothPoints(points: GPSPoint[], windowSize = 5): GPSPoint[] {
   })
 }
 
+/** Remove consecutive duplicate GPS points (same lat, lng, time). */
+function deduplicateConsecutivePoints(points: GPSPoint[]): GPSPoint[] {
+  if (points.length <= 1) return points
+  const result = [points[0]]
+  for (let i = 1; i < points.length; i++) {
+    const prev = points[i - 1]
+    const curr = points[i]
+    if (curr.lat !== prev.lat || curr.lng !== prev.lng || curr.time !== prev.time) {
+      result.push(curr)
+    }
+  }
+  return result
+}
+
 function detectStartFinishLine(points: GPSPoint[]): { lat1: number; lng1: number; lat2: number; lng2: number } | null {
   if (points.length < 100) return null
 
@@ -201,6 +215,27 @@ function App() {
         const vboResult = parseVBO(text)
         points = vboResult.points
         vboStartFinishLine = vboResult.startFinishLine
+
+        // Remove duplicate consecutive points from flatMap lap junctions
+        points = deduplicateConsecutivePoints(points)
+
+        // VBO exported via laps.flatMap ends exactly at the last crossing index,
+        // missing the point just past the S/F crossing. Extrapolate one data point
+        // so the final crossing is detectable.
+        if (vboStartFinishLine && points.length >= 2) {
+          const last = points[points.length - 1]
+          const prev = points[points.length - 2]
+          const dt = last.time - prev.time
+          if (dt > 0) {
+            points = [...points, {
+              lat: 2 * last.lat - prev.lat,
+              lng: 2 * last.lng - prev.lng,
+              speed: last.speed,
+              time: last.time + dt,
+              altitude: last.altitude,
+            }]
+          }
+        }
       } else if (isGeoJSON) {
         points = await parseGeoJSONFile(file)
       } else if (isVideo) {
@@ -225,7 +260,9 @@ function App() {
       setProcessingStage('smoothing')
       await new Promise(r => setTimeout(r, 0))
 
-      const smooth = smoothPoints(points)
+      // VBO data is already from a previous smooth pass; re-smoothing shifts
+      // the first point across the S/F line, causing the first lap crossing to be missed.
+      const smooth = isVBO ? points : smoothPoints(points)
       setSmoothedPoints(smooth)
 
       // Check for matching saved track profile
@@ -310,6 +347,7 @@ function App() {
             analyses: derived.analyses,
             corners,
             startFinishLine: { lat1: sf.lat1, lng1: sf.lng1, lat2: sf.lat2, lng2: sf.lng2 },
+            points: smooth,
             trackSemantics: derived.trackSemantics,
           }
 
@@ -392,6 +430,7 @@ function App() {
         analyses: derived.analyses,
         corners: data.corners,
         startFinishLine: data.startFinishLine,
+        points: smoothedPoints.length > 0 ? smoothedPoints : undefined,
         trackSemantics: derived.trackSemantics,
       }
 
