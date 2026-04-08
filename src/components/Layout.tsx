@@ -565,35 +565,66 @@ export default function Layout({ session, aiConfig, onAiConfigChange, onNewSessi
               </div>
             </Card>
 
-            {/* Consistency */}
-            <Card className="overflow-y-auto">
-              <CardHeader title="一致性" />
-              <div className="p-2">
-                <table className="w-full text-[10px]">
-                  <thead>
-                    <tr className="text-gray-500 border-b border-gray-800">
-                      <th className="text-left py-0.5">弯道</th>
-                      <th className="text-right py-0.5">标准差</th>
-                      <th className="text-center py-0.5">评级</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {fullAnalysis.consistency.map((c) => {
-                      const ratingColor = c.rating === '非常稳定' ? 'text-green-400' : c.rating === '稳定' ? 'text-blue-400' : c.rating === '波动' ? 'text-yellow-400' : 'text-red-400'
-                      return (
-                        <tr key={c.corner} className="border-b border-gray-800/30">
-                          <td className="py-0.5 font-medium text-gray-300">{c.corner}</td>
-                          <td className="text-right py-0.5 text-gray-400 font-mono">{c.stdDev.toFixed(3)}s</td>
-                          <td className={`text-center py-0.5 ${ratingColor}`}>{c.rating}</td>
-                        </tr>
-                      )
-                    })}
-                  </tbody>
-                </table>
+            {/* Deep analysis — coaching prescription (結果→診斷→處方 flow) */}
+            <Card span={2}>
+              <CardHeader title="深度分析" extra={<button onClick={() => setShowAIChat(true)} className="text-[10px] text-purple-400 hover:text-purple-300">AI 教练 →</button>} />
+              <div className="p-3">
+                <AnalysisReport analysis={fullAnalysis} />
+                {racingLineAnalyses.length > 0 && (
+                  <div className="mt-2">
+                    <RacingLineReport analyses={racingLineAnalyses} fastestLapId={fastestLap.id} />
+                  </div>
+                )}
               </div>
             </Card>
 
-            {/* Lap trend — compact bar chart */}
+            {/* === Comparison cards — evidence supporting coach advice === */}
+            {hasComparison && currentRLA && (
+              <>
+                {/* Racing line deviations */}
+                <Card className="overflow-y-auto">
+                  <CardHeader title="走线偏差" extra={<span className="text-[9px] text-purple-400">第{comparisonLapId}圈 vs 第{fastestLap.id}圈</span>} />
+                  <div className="p-2">
+                    <table className="w-full text-[10px]">
+                      <thead>
+                        <tr className="text-gray-500 border-b border-gray-800">
+                          <th className="text-left py-0.5">弯道</th>
+                          <th className="text-right py-0.5">偏差</th>
+                          <th className="text-center py-0.5">一致性</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {currentRLA.corners.map((c) => {
+                          const absM = Math.abs(c.meanDeviation)
+                          const color = absM < 0.5 ? 'text-green-400' : absM < 1.5 ? 'text-yellow-400' : absM < 3 ? 'text-orange-400' : 'text-red-400'
+                          const consColor = c.curvatureConsistency >= 85 ? 'text-green-400' : c.curvatureConsistency >= 65 ? 'text-yellow-400' : 'text-orange-400'
+                          return (
+                            <tr key={c.cornerName} className="border-b border-gray-800/30">
+                              <td className="py-0.5 font-medium text-gray-300">{c.cornerName}</td>
+                              <td className={`text-right py-0.5 ${color}`}>{c.meanDeviation >= 0 ? '+' : ''}{c.meanDeviation.toFixed(2)}m</td>
+                              <td className={`text-center py-0.5 ${consColor}`}>{c.curvatureConsistency}%</td>
+                            </tr>
+                          )
+                        })}
+                      </tbody>
+                    </table>
+                  </div>
+                </Card>
+
+                {/* Brake/throttle card removed — info now in corner trajectory maps */}
+              </>
+            )}
+
+            {/* Corner performance table — detailed reference */}
+            <Card span={2} className="overflow-y-auto">
+              <CornerTable
+                analyses={session.analyses}
+                selectedLapIds={selectedLapIds}
+                fastestLapId={fastestLap.id}
+              />
+            </Card>
+
+            {/* Lap trend — session progression */}
             {fullAnalysis.lapTrend.laps.length > 0 && (() => {
               const { laps: trendLaps, trend, peakRange, worstRange } = fullAnalysis.lapTrend
               const times = trendLaps.map(l => l.time)
@@ -631,62 +662,31 @@ export default function Layout({ session, aiConfig, onAiConfigChange, onNewSessi
               )
             })()}
 
-            {/* Corner performance table — full width */}
-            <Card span={2} className="overflow-y-auto">
-              <CornerTable
-                analyses={session.analyses}
-                selectedLapIds={selectedLapIds}
-                fastestLapId={fastestLap.id}
-              />
-            </Card>
-
-            {/* === Comparison cards — only shown when a non-fastest lap is selected === */}
-            {hasComparison && currentRLA && (
-              <>
-                {/* Racing line deviations */}
-                <Card className="overflow-y-auto">
-                  <CardHeader title="走线偏差" extra={<span className="text-[9px] text-purple-400">第{comparisonLapId}圈 vs 第{fastestLap.id}圈</span>} />
-                  <div className="p-2">
-                    <table className="w-full text-[10px]">
-                      <thead>
-                        <tr className="text-gray-500 border-b border-gray-800">
-                          <th className="text-left py-0.5">弯道</th>
-                          <th className="text-right py-0.5">偏差</th>
-                          <th className="text-center py-0.5">一致性</th>
+            {/* Consistency — advanced analysis */}
+            <Card className="overflow-y-auto">
+              <CardHeader title="一致性" />
+              <div className="p-2">
+                <table className="w-full text-[10px]">
+                  <thead>
+                    <tr className="text-gray-500 border-b border-gray-800">
+                      <th className="text-left py-0.5">弯道</th>
+                      <th className="text-right py-0.5">标准差</th>
+                      <th className="text-center py-0.5">评级</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {fullAnalysis.consistency.map((c) => {
+                      const ratingColor = c.rating === '非常稳定' ? 'text-green-400' : c.rating === '稳定' ? 'text-blue-400' : c.rating === '波动' ? 'text-yellow-400' : 'text-red-400'
+                      return (
+                        <tr key={c.corner} className="border-b border-gray-800/30">
+                          <td className="py-0.5 font-medium text-gray-300">{c.corner}</td>
+                          <td className="text-right py-0.5 text-gray-400 font-mono">{c.stdDev.toFixed(3)}s</td>
+                          <td className={`text-center py-0.5 ${ratingColor}`}>{c.rating}</td>
                         </tr>
-                      </thead>
-                      <tbody>
-                        {currentRLA.corners.map((c) => {
-                          const absM = Math.abs(c.meanDeviation)
-                          const color = absM < 0.5 ? 'text-green-400' : absM < 1.5 ? 'text-yellow-400' : absM < 3 ? 'text-orange-400' : 'text-red-400'
-                          const consColor = c.curvatureConsistency >= 85 ? 'text-green-400' : c.curvatureConsistency >= 65 ? 'text-yellow-400' : 'text-orange-400'
-                          return (
-                            <tr key={c.cornerName} className="border-b border-gray-800/30">
-                              <td className="py-0.5 font-medium text-gray-300">{c.cornerName}</td>
-                              <td className={`text-right py-0.5 ${color}`}>{c.meanDeviation >= 0 ? '+' : ''}{c.meanDeviation.toFixed(2)}m</td>
-                              <td className={`text-center py-0.5 ${consColor}`}>{c.curvatureConsistency}%</td>
-                            </tr>
-                          )
-                        })}
-                      </tbody>
-                    </table>
-                  </div>
-                </Card>
-
-                {/* Brake/throttle card removed — info now in corner trajectory maps */}
-              </>
-            )}
-
-            {/* Deep analysis — 2 columns */}
-            <Card span={2}>
-              <CardHeader title="深度分析" extra={<button onClick={() => setShowAIChat(true)} className="text-[10px] text-purple-400 hover:text-purple-300">AI 教练 →</button>} />
-              <div className="p-3">
-                <AnalysisReport analysis={fullAnalysis} />
-                {racingLineAnalyses.length > 0 && (
-                  <div className="mt-2">
-                    <RacingLineReport analyses={racingLineAnalyses} fastestLapId={fastestLap.id} />
-                  </div>
-                )}
+                      )
+                    })}
+                  </tbody>
+                </table>
               </div>
             </Card>
 
