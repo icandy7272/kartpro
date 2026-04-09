@@ -206,6 +206,26 @@ export default function FileUpload({ onFileSelect, historySessions, onLoadSessio
           </div>
         </div>
       )}
+
+      <footer className="mt-8 flex items-center justify-center gap-4 text-[11px] text-gray-500">
+        <a
+          href="https://beian.miit.gov.cn/"
+          target="_blank"
+          rel="noreferrer"
+          className="hover:text-gray-300 hover:underline"
+        >
+          陕ICP备2026007460号-1
+        </a>
+        <a
+          href="https://beian.mps.gov.cn/#/query/webSearch?code=11010502060077"
+          target="_blank"
+          rel="noreferrer"
+          className="flex items-center gap-1 hover:text-gray-300 hover:underline"
+        >
+          <img src="/beian-icon.png" alt="" className="h-3 w-3" />
+          京公网安备11010502060077号
+        </a>
+      </footer>
     </div>
   )
 }
