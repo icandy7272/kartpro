@@ -339,6 +339,7 @@ export default function Layout({ session, aiConfig, onAiConfigChange, onNewSessi
         )}
         <div className="flex items-center justify-between gap-2">
           <div className="flex items-center gap-2 sm:gap-4 min-w-0">
+            <img src="/logo.png" alt="Cheer Up Racing" className="h-7" />
             <h1 className="text-sm font-bold text-purple-400 shrink-0">KartPro</h1>
             <div className="h-4 w-px bg-gray-700 hidden sm:block" />
             <span className="text-xs text-gray-400 truncate hidden sm:inline">{session.filename}</span>
