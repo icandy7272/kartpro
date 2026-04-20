@@ -62,6 +62,26 @@ function totalDistance(points: GPSPoint[]): number {
   return dist
 }
 
+function estimateMinLapDistanceMeters(points: GPSPoint[]): number {
+  let minLat = Infinity
+  let maxLat = -Infinity
+  let minLng = Infinity
+  let maxLng = -Infinity
+
+  for (const point of points) {
+    minLat = Math.min(minLat, point.lat)
+    maxLat = Math.max(maxLat, point.lat)
+    minLng = Math.min(minLng, point.lng)
+    maxLng = Math.max(maxLng, point.lng)
+  }
+
+  const diagonalMeters = haversineDistance(minLat, minLng, maxLat, maxLng)
+
+  // Scale the minimum distance with the overall course size so small test loops
+  // are still accepted, while full kart tracks keep a stricter floor.
+  return Math.min(100, Math.max(30, diagonalMeters * 1.5))
+}
+
 /**
  * Widen the start/finish line perpendicular to the track direction to account for GPS noise.
  * Takes the SF line endpoints and extends them outward by a tolerance in meters.
@@ -108,6 +128,8 @@ export function detectLaps(
   }
   const crossings: Crossing[] = []
   const MIN_CROSSING_INTERVAL_MS = 10000 // at least 10s between crossings to avoid double-count
+  const MIN_LAP_DURATION_SECONDS = 15
+  const minLapDistanceMeters = estimateMinLapDistanceMeters(points)
 
   for (let i = 0; i < points.length - 1; i++) {
     const t = segmentIntersection(
@@ -127,7 +149,6 @@ export function detectLaps(
         const timeDiff = exactTime - lastCrossing.exactTime
         if (timeDiff < MIN_CROSSING_INTERVAL_MS) continue
       }
-      console.log(`[LAP-DETECT] Crossing at index ${i}, t=${t.toFixed(6)}, time_A=${points[i].time}, time_B=${points[i+1].time}, exactTime=${exactTime.toFixed(3)}, interval=${points[i+1].time - points[i].time}ms`)
       crossings.push({ index: i, t, exactTime })
     }
   }
@@ -148,14 +169,12 @@ export function detectLaps(
     const startTime = startCrossing.exactTime
     const endTime = endCrossing.exactTime
     const duration = (endTime - startTime) / 1000
-    console.log(`[LAP-DETECT] Lap ${laps.length + 1}: startTime=${startTime.toFixed(3)}, endTime=${endTime.toFixed(3)}, duration=${duration.toFixed(6)}s`)
     const dist = totalDistance(lapPoints)
     const speeds = lapPoints.map((p) => p.speed)
     const maxSpeed = Math.max(...speeds)
     const avgSpeed = speeds.reduce((a, b) => a + b, 0) / speeds.length
 
-    // Filter out obviously invalid laps (too short distance for a kart track)
-    if (dist < 100 || duration < 15) continue
+    if (dist < minLapDistanceMeters || duration < MIN_LAP_DURATION_SECONDS) continue
 
     laps.push({
       id: laps.length + 1,

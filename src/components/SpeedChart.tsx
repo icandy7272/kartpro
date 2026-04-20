@@ -1,6 +1,6 @@
 import { useMemo, useRef, useEffect } from 'react'
 import ReactECharts from 'echarts-for-react'
-import type { LapAnalysis } from '../types'
+import type { GPSPoint, LapAnalysis } from '../types'
 import { getLapColor } from '../lib/lap-colors'
 
 interface SpeedChartProps {
@@ -17,6 +17,51 @@ function haversineDistance(lat1: number, lng1: number, lat2: number, lng2: numbe
   const a = Math.sin(dLat / 2) ** 2 +
     Math.cos((lat1 * Math.PI) / 180) * Math.cos((lat2 * Math.PI) / 180) * Math.sin(dLng / 2) ** 2
   return 2 * R * Math.asin(Math.sqrt(a))
+}
+
+type SpeedTooltipParam = {
+  seriesName: string
+  data: [number, number]
+  color: string
+  dataIndex: number
+}
+
+export function buildSpeedSeriesData(points: GPSPoint[]): [number, number][] {
+  const data: [number, number][] = []
+  let distance = 0
+
+  for (let i = 0; i < points.length; i++) {
+    if (i > 0) {
+      distance += haversineDistance(points[i - 1].lat, points[i - 1].lng, points[i].lat, points[i].lng)
+    }
+
+    data.push([
+      Math.round(distance * 100) / 100,
+      Math.round(points[i].speed * 3.6 * 10) / 10,
+    ])
+  }
+
+  return data
+}
+
+export function formatSpeedTooltip(params: SpeedTooltipParam[]): string {
+  if (!Array.isArray(params) || params.length === 0) return ''
+
+  const distance = params[0].data[0]
+  const latestBySeries = new Map<string, SpeedTooltipParam>()
+  for (const param of params) {
+    latestBySeries.set(param.seriesName, param)
+  }
+
+  let html = `<div style="font-size:11px;color:#9ca3af;margin-bottom:4px;">${Math.round(distance)}m</div>`
+  for (const param of latestBySeries.values()) {
+    html += `<div style="display:flex;align-items:center;gap:6px;">
+      <span style="width:8px;height:8px;border-radius:50%;background:${param.color};display:inline-block;"></span>
+      <span>${param.seriesName}: ${param.data[1]} km/h</span>
+    </div>`
+  }
+
+  return html
 }
 
 export default function SpeedChart({ analyses, selectedLapIds, fastestLapId, onHoverIndex }: SpeedChartProps) {
@@ -66,14 +111,7 @@ export default function SpeedChart({ analyses, selectedLapIds, fastestLapId, onH
     const series = selected.map((analysis) => {
       const points = analysis.lap.points
       const color = getLapColor(analysis.lap.id, selectedLapIds, fastestLapId)
-      const data: [number, number][] = []
-      let distance = 0
-      for (let i = 0; i < points.length; i++) {
-        if (i > 0) {
-          distance += haversineDistance(points[i - 1].lat, points[i - 1].lng, points[i].lat, points[i].lng)
-        }
-        data.push([Math.round(distance), Math.round(points[i].speed * 3.6 * 10) / 10])
-      }
+      const data = buildSpeedSeriesData(points)
       return {
         name: `第 ${analysis.lap.id} 圈`,
         type: 'line' as const,
@@ -90,18 +128,7 @@ export default function SpeedChart({ analyses, selectedLapIds, fastestLapId, onH
         backgroundColor: '#1f2937',
         borderColor: '#374151',
         textStyle: { color: '#e5e7eb', fontSize: 12 },
-        formatter: (params: Array<{ seriesName: string; data: [number, number]; color: string; dataIndex: number }>) => {
-          if (!Array.isArray(params) || params.length === 0) return ''
-          const distance = params[0].data[0]
-          let html = `<div style="font-size:11px;color:#9ca3af;margin-bottom:4px;">${distance}m</div>`
-          for (const p of params) {
-            html += `<div style="display:flex;align-items:center;gap:6px;">
-              <span style="width:8px;height:8px;border-radius:50%;background:${p.color};display:inline-block;"></span>
-              <span>${p.seriesName}: ${p.data[1]} km/h</span>
-            </div>`
-          }
-          return html
-        },
+        formatter: formatSpeedTooltip,
       },
       legend: {
         show: selected.length > 1, top: 5,
@@ -114,7 +141,11 @@ export default function SpeedChart({ analyses, selectedLapIds, fastestLapId, onH
         nameTextStyle: { color: '#6b7280', fontSize: 11 },
         axisLine: { lineStyle: { color: '#374151' } },
         axisTick: { lineStyle: { color: '#374151' } },
-        axisLabel: { color: '#6b7280', fontSize: 10 },
+        axisLabel: {
+          color: '#6b7280',
+          fontSize: 10,
+          formatter: (value: number) => `${Math.round(value)}`,
+        },
         splitLine: { lineStyle: { color: '#1f2937' } },
       },
       yAxis: {

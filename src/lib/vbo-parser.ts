@@ -18,19 +18,24 @@ export interface VBOParseResult {
  * Velocity: km/h in file, converted to m/s for GPSPoint
  */
 export function parseVBO(text: string): VBOParseResult {
-  const sections = parseSections(text)
+  const normalizedText = normalizeLineEndings(text)
+  const sections = parseSections(normalizedText)
 
   const sessionName = parseSessionName(sections['session data'] ?? '')
-  const startFinishLine = parseLaptiming(sections['laptiming'] ?? '')
   const columnNames = parseColumnNames(sections['column names'] ?? '')
   const points = parseDataRows(sections['data'] ?? '', columnNames)
-  const date = extractDate(text, points)
+  const startFinishLine = parseLaptiming(sections['laptiming'] ?? '', points)
+  const date = extractDate(normalizedText, points)
 
   if (points.length === 0) {
     throw new Error('No valid GPS data found in VBO file.')
   }
 
   return { points, sessionName, startFinishLine, date }
+}
+
+function normalizeLineEndings(text: string): string {
+  return text.replace(/\r\n/g, '\n').replace(/\r/g, '\n')
 }
 
 function parseSections(text: string): Record<string, string> {
@@ -67,26 +72,75 @@ function parseSessionName(content: string): string {
   return 'Unknown Session'
 }
 
-function parseLaptiming(content: string): { lat1: number; lng1: number; lat2: number; lng2: number } | undefined {
-  // Format: Start   <lon1> <lat1> <lon2> <lat2> ...
-  // Values are in RaceChrono's total-decimal-minutes format
+function parseLaptiming(
+  content: string,
+  points: GPSPoint[]
+): { lat1: number; lng1: number; lat2: number; lng2: number } | undefined {
   for (const line of content.split(/\r?\n/)) {
     const match = line.match(/^Start\s+([-+]?\d+\.?\d*)\s+([-+]?\d+\.?\d*)\s+([-+]?\d+\.?\d*)\s+([-+]?\d+\.?\d*)/)
     if (match) {
-      const lon1Raw = parseFloat(match[1])
-      const lat1Raw = parseFloat(match[2])
-      const lon2Raw = parseFloat(match[3])
-      const lat2Raw = parseFloat(match[4])
+      const values = match.slice(1).map((value) => parseFloat(value))
+      const candidates = [
+        {
+          lat1: values[1] / 60,
+          lng1: -values[0] / 60,
+          lat2: values[3] / 60,
+          lng2: -values[2] / 60,
+        },
+        {
+          lat1: values[0] / 60,
+          lng1: -values[1] / 60,
+          lat2: values[2] / 60,
+          lng2: -values[3] / 60,
+        },
+      ]
 
-      return {
-        lat1: lat1Raw / 60,
-        lng1: -lon1Raw / 60,
-        lat2: lat2Raw / 60,
-        lng2: -lon2Raw / 60,
-      }
+      return chooseBestLaptimingCandidate(candidates, points)
     }
   }
   return undefined
+}
+
+function chooseBestLaptimingCandidate(
+  candidates: Array<{ lat1: number; lng1: number; lat2: number; lng2: number }>,
+  points: GPSPoint[]
+): { lat1: number; lng1: number; lat2: number; lng2: number } | undefined {
+  const validCandidates = candidates.filter(isValidStartFinishLine)
+  if (validCandidates.length === 0) return undefined
+  if (validCandidates.length === 1 || points.length === 0) return validCandidates[0]
+
+  let centerLat = 0
+  let centerLng = 0
+  for (const point of points) {
+    centerLat += point.lat
+    centerLng += point.lng
+  }
+  centerLat /= points.length
+  centerLng /= points.length
+
+  return validCandidates.reduce((best, candidate) =>
+    startFinishDistanceScore(candidate, centerLat, centerLng) < startFinishDistanceScore(best, centerLat, centerLng)
+      ? candidate
+      : best
+  )
+}
+
+function isValidStartFinishLine(sf: { lat1: number; lng1: number; lat2: number; lng2: number }): boolean {
+  return isValidCoordinate(sf.lat1, sf.lng1) && isValidCoordinate(sf.lat2, sf.lng2)
+}
+
+function isValidCoordinate(lat: number, lng: number): boolean {
+  return Number.isFinite(lat) && Number.isFinite(lng) && Math.abs(lat) <= 90 && Math.abs(lng) <= 180
+}
+
+function startFinishDistanceScore(
+  sf: { lat1: number; lng1: number; lat2: number; lng2: number },
+  centerLat: number,
+  centerLng: number
+): number {
+  const midLat = (sf.lat1 + sf.lat2) / 2
+  const midLng = (sf.lng1 + sf.lng2) / 2
+  return Math.abs(midLat - centerLat) + Math.abs(midLng - centerLng)
 }
 
 function parseColumnNames(content: string): string[] {
