@@ -23,6 +23,7 @@ interface LayoutProps {
   session: TrainingSession
   aiConfig: AIConfig | null
   onAiConfigChange: (config: AIConfig | null) => void
+  onEditStartFinish: () => void
   onNewSession: () => void
   onUpdateSession: (session: TrainingSession) => void
 }
@@ -110,7 +111,7 @@ function CardHeader({ title, extra }: { title: string; extra?: React.ReactNode }
   )
 }
 
-export default function Layout({ session, aiConfig, onAiConfigChange, onNewSession, onUpdateSession }: LayoutProps) {
+export default function Layout({ session, aiConfig, onAiConfigChange, onEditStartFinish, onNewSession, onUpdateSession }: LayoutProps) {
   const fastestLap = useMemo(
     () => session.laps.reduce((best, lap) => (lap.duration < best.duration ? lap : best), session.laps[0]),
     [session.laps]
@@ -205,14 +206,14 @@ export default function Layout({ session, aiConfig, onAiConfigChange, onNewSessi
     const analyses = session.laps.map(lap => reanalyzeLap(lap, newCorners, fastestLap.points))
     onUpdateSession({ ...session, corners: newCorners, analyses })
     setIsAddingCorner(false)
-  }, [session, fastestLap.id, onUpdateSession])
+  }, [session, fastestLap.id, fastestLap.points, onUpdateSession])
 
   const handleDeleteCorner = useCallback((cornerId: number) => {
     const newCorners = session.corners.filter(c => c.id !== cornerId)
     newCorners.forEach((c, i) => { c.id = i + 1; c.name = `T${i + 1}` })
     const analyses = session.laps.map(lap => reanalyzeLap(lap, newCorners, fastestLap.points))
     onUpdateSession({ ...session, corners: newCorners, analyses })
-  }, [session, onUpdateSession])
+  }, [session, fastestLap.points, onUpdateSession])
 
   const handleCompare = useCallback((lap1Id: number, lap2Id: number) => {
     setComparisonLaps([lap1Id, lap2Id])
@@ -350,6 +351,7 @@ export default function Layout({ session, aiConfig, onAiConfigChange, onNewSessi
             {!comparisonMode && (
               <button onClick={() => secondaryFileInputRef.current?.click()} disabled={secondaryProcessing} className="px-2.5 py-1 bg-purple-700 hover:bg-purple-600 disabled:bg-gray-700 text-white text-[11px] rounded-md whitespace-nowrap shrink-0">{secondaryProcessing ? '...' : '导入对比'}</button>
             )}
+            <button onClick={onEditStartFinish} className="px-2.5 py-1 bg-gray-800 hover:bg-gray-700 text-amber-300 text-[11px] rounded-md whitespace-nowrap shrink-0">起终线</button>
             <button onClick={() => exportToPDF({ filename: `KartPro_${session.filename.replace(/\.[^.]+$/, '')}`, title: session.filename, date: session.date.toLocaleDateString() })} className="px-2.5 py-1 bg-gray-800 hover:bg-gray-700 text-gray-300 text-[11px] rounded-md whitespace-nowrap shrink-0">导出</button>
             <button onClick={() => { const allPoints = session.laps.flatMap(l => l.points); exportToVBO(allPoints, session.filename) }} className="px-2.5 py-1 bg-gray-800 hover:bg-gray-700 text-green-400 text-[11px] rounded-md whitespace-nowrap shrink-0">存VBO</button>
             <button onClick={() => { setSavedProfiles(getTrackProfiles()); setShowProfileManager(true) }} className="px-2.5 py-1 bg-gray-800 hover:bg-gray-700 text-gray-300 text-[11px] rounded-md whitespace-nowrap shrink-0">赛道</button>
@@ -361,6 +363,7 @@ export default function Layout({ session, aiConfig, onAiConfigChange, onNewSessi
           {!comparisonMode && (
             <button onClick={() => secondaryFileInputRef.current?.click()} disabled={secondaryProcessing} className="px-2 py-1 bg-purple-700 hover:bg-purple-600 disabled:bg-gray-700 text-white text-[10px] rounded-md whitespace-nowrap shrink-0">{secondaryProcessing ? '...' : '对比'}</button>
           )}
+          <button onClick={onEditStartFinish} className="px-2 py-1 bg-gray-800 hover:bg-gray-700 text-amber-300 text-[10px] rounded-md whitespace-nowrap shrink-0">起终线</button>
           <button onClick={() => exportToPDF({ filename: `KartPro_${session.filename.replace(/\.[^.]+$/, '')}`, title: session.filename, date: session.date.toLocaleDateString() })} className="px-2 py-1 bg-gray-800 hover:bg-gray-700 text-gray-300 text-[10px] rounded-md whitespace-nowrap shrink-0">导出</button>
           <button onClick={() => { const allPoints = session.laps.flatMap(l => l.points); exportToVBO(allPoints, session.filename) }} className="px-2 py-1 bg-gray-800 hover:bg-gray-700 text-green-400 text-[10px] rounded-md whitespace-nowrap shrink-0">VBO</button>
           <button onClick={() => { setSavedProfiles(getTrackProfiles()); setShowProfileManager(true) }} className="px-2 py-1 bg-gray-800 hover:bg-gray-700 text-gray-300 text-[10px] rounded-md whitespace-nowrap shrink-0">赛道</button>
@@ -502,7 +505,7 @@ export default function Layout({ session, aiConfig, onAiConfigChange, onNewSessi
                 brakePoints={brakePoints}
                 throttlePoints={throttlePoints}
               />
-              <div className="absolute top-2 right-2 z-[1000] flex gap-1">
+              <div className="absolute top-2 left-2 z-[1000] flex gap-1">
                 <button onClick={() => setIsAddingCorner(!isAddingCorner)} className={`px-2 py-1 text-[10px] rounded-md shadow-lg ${isAddingCorner ? 'bg-green-600 text-white' : 'bg-gray-800/90 text-gray-300 hover:bg-gray-700/90'}`}>
                   {isAddingCorner ? '点击添加...' : '+ 弯道'}
                 </button>

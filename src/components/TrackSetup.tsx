@@ -1,8 +1,16 @@
-import { useState, useCallback, useMemo } from 'react'
+import { useState, useCallback, useMemo, useEffect, useRef } from 'react'
 import { MapContainer, TileLayer, Polyline, Marker, useMap, useMapEvents } from 'react-leaflet'
 import L from 'leaflet'
 import 'leaflet/dist/leaflet.css'
 import type { GPSPoint, Corner, Lap, TrackProfile } from '../types'
+import { DEFAULT_MAP_MODE_BY_SURFACE, type MapMode } from '../lib/map/map-modes'
+import { resolveLeafletFitBoundsPadding, resolveLeafletViewportSize } from '../lib/map/fit-padding'
+import { getLeafletTileLayerProps, resolveMapModeProvider } from '../lib/map/map-tile-config'
+import MapModeSwitcher from './maps/MapModeSwitcher'
+import SatelliteCalibrationControl from './maps/SatelliteCalibrationControl'
+import TrackAlignmentLayer from './maps/TrackAlignmentLayer'
+import AmapSatelliteMap from './maps/AmapSatelliteMap'
+import { useAmapSatelliteCalibration } from './maps/useAmapSatelliteCalibration'
 
 interface StartFinishLine {
   lat1: number; lng1: number; lat2: number; lng2: number
@@ -27,11 +35,15 @@ type Stage = 'sf' | 'corners'
 type SFMode = 'auto' | 'manual'
 // Max distance in meters from track to register a corner click
 const MAX_CLICK_DISTANCE = 30
+const DEFAULT_FIT_BOUNDS_PADDING: [number, number] = [30, 30]
+const DEFAULT_FIT_BOUNDS_PADDING_RATIO = 0.075
+const SATELLITE_FIT_VIEW_PADDING_RATIO = 0.075
+const SATELLITE_FIT_VIEW_MAX_ZOOM = 20
 
 function createMarkerIcon(color: string) {
   return L.divIcon({
     className: '',
-    html: `<div style="width:16px;height:16px;border-radius:50%;background:${color};border:2px solid white;box-shadow:0 0 6px rgba(0,0,0,0.5);"></div>`,
+    html: createMarkerHtml(color),
     iconSize: [16, 16],
     iconAnchor: [8, 8],
   })
@@ -40,10 +52,18 @@ function createMarkerIcon(color: string) {
 function createCornerIcon(name: string, canDelete: boolean) {
   return L.divIcon({
     className: '',
-    html: `<div style="background:#7c3aed;color:white;font-size:11px;font-weight:bold;padding:3px 6px;border-radius:4px;white-space:nowrap;border:1px solid #a78bfa;cursor:${canDelete ? 'pointer' : 'default'}">${name}${canDelete ? ' ✕' : ''}</div>`,
+    html: createCornerLabelHtml(name, canDelete),
     iconSize: [canDelete ? 46 : 34, 20],
     iconAnchor: [canDelete ? 23 : 17, 10],
   })
+}
+
+function createMarkerHtml(color: string) {
+  return `<div style="width:16px;height:16px;border-radius:50%;background:${color};border:2px solid white;box-shadow:0 0 6px rgba(0,0,0,0.5);"></div>`
+}
+
+function createCornerLabelHtml(name: string, canDelete: boolean) {
+  return `<div style="background:#7c3aed;color:white;font-size:11px;font-weight:bold;padding:3px 6px;border-radius:4px;white-space:nowrap;border:1px solid #a78bfa;cursor:${canDelete ? 'pointer' : 'default'}">${name}${canDelete ? ' ✕' : ''}</div>`
 }
 
 function speedToColor(speed: number, minSpeed: number, maxSpeed: number): string {
@@ -70,14 +90,37 @@ function haversineDistance(a: { lat: number; lng: number }, b: { lat: number; ln
   return 2 * R * Math.asin(Math.sqrt(h))
 }
 
-function FitBounds({ bounds }: { bounds: L.LatLngBounds | null }) {
+function FitBounds({
+  bounds,
+  padding,
+  paddingRatio,
+}: {
+  bounds: L.LatLngBounds | null
+  padding: [number, number]
+  paddingRatio?: number
+}) {
   const map = useMap()
-  // Only fit on first render
-  const [fitted, setFitted] = useState(false)
-  if (bounds && !fitted) {
-    map.fitBounds(bounds, { padding: [30, 30] })
-    setFitted(true)
-  }
+  const fittedBoundsKeyRef = useRef<string | null>(null)
+
+  useEffect(() => {
+    if (!bounds) {
+      return
+    }
+
+    const boundsKey = bounds.toBBoxString()
+    if (fittedBoundsKeyRef.current === boundsKey) {
+      return
+    }
+
+    const effectivePadding = resolveLeafletFitBoundsPadding(
+      resolveLeafletViewportSize(map.getSize(), map.getContainer()),
+      padding,
+      paddingRatio
+    )
+    map.fitBounds(bounds, { padding: effectivePadding })
+    fittedBoundsKeyRef.current = boundsKey
+  }, [map, bounds, padding, paddingRatio])
+
   return null
 }
 
@@ -89,12 +132,19 @@ function ClickHandler({ onClick }: { onClick: (lat: number, lng: number) => void
 export default function TrackSetup({ points, autoDetected, onComplete, detectLaps, detectCorners, matchedProfile, defaultTrackName }: TrackSetupProps) {
   const [stage, setStage] = useState<Stage>('sf')
   const [sfMode, setSFMode] = useState<SFMode>('auto')
+  const [mapMode, setMapMode] = useState<MapMode>(DEFAULT_MAP_MODE_BY_SURFACE.trackSetup)
   const [manualPoints, setManualPoints] = useState<Array<{ lat: number; lng: number }>>([])
   const [sfLine, setSFLine] = useState<StartFinishLine | null>(null)
   const [laps, setLaps] = useState<Lap[]>([])
   const [corners, setCorners] = useState<Corner[]>([])
+  const [draggedLabelPositions, setDraggedLabelPositions] = useState<Record<number, { lat: number; lng: number }>>({})
   const [error, setError] = useState<string | null>(null)
   const [trackName, setTrackName] = useState(defaultTrackName ?? '未命名赛道')
+  const {
+    adjustSatelliteCalibration,
+    resetSatelliteCalibration,
+    satelliteCalibration,
+  } = useAmapSatelliteCalibration()
 
   const bounds = useMemo(() => {
     if (points.length === 0) return null
@@ -132,6 +182,11 @@ export default function TrackSetup({ points, autoDetected, onComplete, detectLap
     return segments
   }, [fastestLap])
 
+  const alignmentPoints = useMemo(
+    () => fastestLap?.points ?? points,
+    [fastestLap, points]
+  )
+
   const cornerMarkers = useMemo(() => {
     if (!fastestLap) return []
     const metersPerDegLat = 111320
@@ -143,6 +198,17 @@ export default function TrackSetup({ points, autoDetected, onComplete, detectLap
       .map((c) => {
         const midIdx = Math.floor((c.startIndex + c.endIndex) / 2)
         const trackPoint = fastestLap.points[Math.min(midIdx, fastestLap.points.length - 1)]
+        const draggedPosition = draggedLabelPositions[c.id]
+
+        if (draggedPosition) {
+          return {
+            corner: c,
+            labelLat: draggedPosition.lat,
+            labelLng: draggedPosition.lng,
+            trackLat: trackPoint.lat,
+            trackLng: trackPoint.lng,
+          }
+        }
 
         // Calculate track direction at this point
         const prevIdx = Math.max(0, midIdx - 3)
@@ -174,7 +240,7 @@ export default function TrackSetup({ points, autoDetected, onComplete, detectLap
           labelLng,
         }
       })
-  }, [corners, fastestLap])
+  }, [corners, draggedLabelPositions, fastestLap])
 
   // ---- SF Line handlers ----
   const handleSFMapClick = useCallback((lat: number, lng: number) => {
@@ -210,6 +276,7 @@ export default function TrackSetup({ points, autoDetected, onComplete, detectLap
     setSFLine(sf)
     setLaps(detectedLaps)
     setCorners(detectedCorners)
+    setDraggedLabelPositions({})
     setError(null)
     setStage('corners')
   }, [sfMode, autoDetected, manualPoints, points, detectLaps, detectCorners])
@@ -266,6 +333,7 @@ export default function TrackSetup({ points, autoDetected, onComplete, detectLap
     }))
 
     setCorners(renumbered)
+    setDraggedLabelPositions({})
   }, [stage, fastestLap, corners])
 
   const handleDeleteCorner = useCallback((cornerId: number) => {
@@ -276,7 +344,15 @@ export default function TrackSetup({ points, autoDetected, onComplete, detectLap
       name: `T${i + 1}`,
     }))
     setCorners(renumbered)
+    setDraggedLabelPositions({})
   }, [corners])
+
+  const handleLabelDragEnd = useCallback((cornerId: number, lat: number, lng: number) => {
+    setDraggedLabelPositions((previous) => ({
+      ...previous,
+      [cornerId]: { lat, lng },
+    }))
+  }, [])
 
   const handleComplete = useCallback(() => {
     if (!sfLine || laps.length === 0) return
@@ -287,6 +363,7 @@ export default function TrackSetup({ points, autoDetected, onComplete, detectLap
     setStage('sf')
     setLaps([])
     setCorners([])
+    setDraggedLabelPositions({})
     setSFLine(null)
     setError(null)
   }, [])
@@ -314,6 +391,182 @@ export default function TrackSetup({ points, autoDetected, onComplete, detectLap
   }
 
   const isCornerStage = stage === 'corners'
+  const mapProvider = resolveMapModeProvider(mapMode, {
+    amapJsApiKey: import.meta.env.VITE_AMAP_JSAPI_KEY,
+  })
+  const tileLayerProps = mapProvider.kind === 'leaflet-raster'
+    ? getLeafletTileLayerProps(mapProvider.tileConfig)
+    : null
+
+  const mapContent = mapProvider.kind === 'amap-jsapi' && mapMode === 'satellite'
+    ? (
+      <AmapSatelliteMap
+        amapKey={mapProvider.key}
+        className="h-full w-full"
+        fitPoints={alignmentPoints}
+        fitViewMaxZoom={SATELLITE_FIT_VIEW_MAX_ZOOM}
+        fitViewPaddingRatio={SATELLITE_FIT_VIEW_PADDING_RATIO}
+        htmlMarkers={[
+          ...(!isCornerStage && sfMode === 'manual'
+            ? manualPoints.map((point, index) => ({
+                id: `manual-${index}`,
+                html: createMarkerHtml(index === 0 ? '#22c55e' : '#ef4444'),
+                includeInFit: false,
+                position: [point.lat, point.lng] as [number, number],
+              }))
+            : []),
+          ...(!isCornerStage && sfMode === 'auto' && autoDetected
+            ? [
+                {
+                  id: 'auto-start',
+                  html: createMarkerHtml('#22c55e'),
+                  includeInFit: false,
+                  position: [autoDetected.lat1, autoDetected.lng1] as [number, number],
+                },
+                {
+                  id: 'auto-end',
+                  html: createMarkerHtml('#ef4444'),
+                  includeInFit: false,
+                  position: [autoDetected.lat2, autoDetected.lng2] as [number, number],
+                },
+              ]
+            : []),
+          ...(isCornerStage
+            ? cornerMarkers.map((cornerMarker) => ({
+                id: `corner-${cornerMarker.corner.id}`,
+                draggable: true,
+                html: createCornerLabelHtml(cornerMarker.corner.name, true),
+                includeInFit: false,
+                onClick: () => handleDeleteCorner(cornerMarker.corner.id),
+                onDragEnd: (lat: number, lng: number) => handleLabelDragEnd(cornerMarker.corner.id, lat, lng),
+                position: [cornerMarker.labelLat, cornerMarker.labelLng] as [number, number],
+              }))
+            : []),
+        ]}
+        onMapClick={!isCornerStage && sfMode === 'manual' ? handleSFMapClick : isCornerStage ? handleCornerMapClick : undefined}
+        satelliteCalibration={satelliteCalibration}
+        polylines={[
+          ...(!isCornerStage
+            ? [{
+                color: '#7c3aed',
+                id: 'track-line',
+                opacity: 0.8,
+                positions: trackPositions,
+                weight: 3,
+              }]
+            : speedSegments.map((segment, index) => ({
+                color: segment.color,
+                id: `speed-${index}`,
+                opacity: 0.9,
+                positions: segment.positions,
+                weight: 4,
+              }))),
+          ...(sfLinePositions
+            ? [{
+                color: '#facc15',
+                dashArray: isCornerStage ? '6,4' : undefined,
+                id: 'start-finish',
+                includeInFit: false,
+                opacity: 1,
+                positions: sfLinePositions,
+                weight: 4,
+              }]
+            : []),
+          ...(isCornerStage
+            ? cornerMarkers.map((cornerMarker) => ({
+                color: '#7c3aed',
+                dashArray: '3,3',
+                id: `connector-${cornerMarker.corner.id}`,
+                includeInFit: false,
+                opacity: 0.5,
+                positions: [
+                  [cornerMarker.trackLat, cornerMarker.trackLng],
+                  [cornerMarker.labelLat, cornerMarker.labelLng],
+                ] as [number, number][],
+                weight: 1,
+              }))
+            : []),
+        ]}
+      />
+    )
+    : (
+      <MapContainer
+        bounds={bounds || undefined}
+        className="h-full w-full"
+        style={{ height: '100%', cursor: (sfMode === 'manual' && stage === 'sf') || isCornerStage ? 'crosshair' : undefined }}
+        zoomControl={true}
+      >
+        {tileLayerProps && <TileLayer {...tileLayerProps} />}
+        <FitBounds
+          bounds={bounds}
+          padding={DEFAULT_FIT_BOUNDS_PADDING}
+          paddingRatio={DEFAULT_FIT_BOUNDS_PADDING_RATIO}
+        />
+        <TrackAlignmentLayer mode={mapMode} points={alignmentPoints} />
+
+        {/* Track line — plain purple in SF stage, speed-colored in corner stage */}
+        {!isCornerStage && (
+          <Polyline positions={trackPositions} color="#7c3aed" weight={3} opacity={0.8} />
+        )}
+
+        {isCornerStage && speedSegments.map((seg, i) => (
+          <Polyline key={i} positions={seg.positions} color={seg.color} weight={4} opacity={0.9} />
+        ))}
+
+        {/* Start/Finish line */}
+        {sfLinePositions && (
+          <Polyline positions={sfLinePositions} color="#facc15" weight={4} opacity={1} dashArray={isCornerStage ? '6,4' : undefined} />
+        )}
+
+        {/* SF markers in SF stage */}
+        {!isCornerStage && sfMode === 'manual' && manualPoints.map((p, i) => (
+          <Marker key={i} position={[p.lat, p.lng]} icon={createMarkerIcon(i === 0 ? '#22c55e' : '#ef4444')} />
+        ))}
+        {!isCornerStage && sfMode === 'auto' && autoDetected && (
+          <>
+            <Marker position={[autoDetected.lat1, autoDetected.lng1]} icon={createMarkerIcon('#22c55e')} />
+            <Marker position={[autoDetected.lat2, autoDetected.lng2]} icon={createMarkerIcon('#ef4444')} />
+          </>
+        )}
+
+        {/* Corner markers with offset labels and connector lines */}
+        {isCornerStage && cornerMarkers.map((cm) => (
+          <span key={cm.corner.id}>
+            {/* Connector line from label to track */}
+            <Polyline
+              positions={[
+                [cm.trackLat, cm.trackLng],
+                [cm.labelLat, cm.labelLng],
+              ]}
+              color="#7c3aed"
+              weight={1}
+              opacity={0.5}
+              dashArray="3,3"
+            />
+            {/* Label at offset position */}
+            <Marker
+              position={[cm.labelLat, cm.labelLng]}
+              icon={createCornerIcon(cm.corner.name, true)}
+              draggable={true}
+              eventHandlers={{
+                dragend: (e) => {
+                  const pos = e.target.getLatLng()
+                  handleLabelDragEnd(cm.corner.id, pos.lat, pos.lng)
+                },
+                click: (e) => {
+                  L.DomEvent.stopPropagation(e.originalEvent)
+                  handleDeleteCorner(cm.corner.id)
+                },
+              }}
+            />
+          </span>
+        ))}
+
+        {/* Click handlers */}
+        {!isCornerStage && sfMode === 'manual' && <ClickHandler onClick={handleSFMapClick} />}
+        {isCornerStage && <ClickHandler onClick={handleCornerMapClick} />}
+      </MapContainer>
+    )
 
   return (
     <div className="h-[100dvh] flex flex-col overflow-hidden">
@@ -385,75 +638,22 @@ export default function TrackSetup({ points, autoDetected, onComplete, detectLap
 
       {/* Map */}
       <div className="flex-1 relative min-h-0">
-        <MapContainer
-          bounds={bounds || undefined}
-          className="h-full w-full"
-          style={{ height: '100%', cursor: (sfMode === 'manual' && stage === 'sf') || isCornerStage ? 'crosshair' : undefined }}
-          zoomControl={true}
-        >
-          <TileLayer
-            attribution='&copy; <a href="https://carto.com/">CARTO</a>'
-            url="https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png"
-          />
-          <FitBounds bounds={bounds} />
+        {mapContent}
 
-          {/* Track line — plain purple in SF stage, speed-colored in corner stage */}
-          {!isCornerStage && (
-            <Polyline positions={trackPositions} color="#7c3aed" weight={3} opacity={0.8} />
-          )}
-
-          {isCornerStage && speedSegments.map((seg, i) => (
-            <Polyline key={i} positions={seg.positions} color={seg.color} weight={4} opacity={0.9} />
-          ))}
-
-          {/* Start/Finish line */}
-          {sfLinePositions && (
-            <Polyline positions={sfLinePositions} color="#facc15" weight={4} opacity={1} dashArray={isCornerStage ? '6,4' : undefined} />
-          )}
-
-          {/* SF markers in SF stage */}
-          {!isCornerStage && sfMode === 'manual' && manualPoints.map((p, i) => (
-            <Marker key={i} position={[p.lat, p.lng]} icon={createMarkerIcon(i === 0 ? '#22c55e' : '#ef4444')} />
-          ))}
-          {!isCornerStage && sfMode === 'auto' && autoDetected && (
-            <>
-              <Marker position={[autoDetected.lat1, autoDetected.lng1]} icon={createMarkerIcon('#22c55e')} />
-              <Marker position={[autoDetected.lat2, autoDetected.lng2]} icon={createMarkerIcon('#ef4444')} />
-            </>
-          )}
-
-          {/* Corner markers with offset labels and connector lines */}
-          {isCornerStage && cornerMarkers.map((cm) => (
-            <span key={cm.corner.id}>
-              {/* Connector line from label to track */}
-              <Polyline
-                positions={[
-                  [cm.trackLat, cm.trackLng],
-                  [cm.labelLat, cm.labelLng],
-                ]}
-                color="#7c3aed"
-                weight={1}
-                opacity={0.5}
-                dashArray="3,3"
+        <div className="pointer-events-none absolute right-3 top-3 z-[1000] flex flex-col items-end gap-2">
+          <div className="pointer-events-auto">
+            <MapModeSwitcher onChange={setMapMode} value={mapMode} />
+          </div>
+          {mapProvider.kind === 'amap-jsapi' && mapMode === 'satellite' && (
+            <div className="pointer-events-auto">
+              <SatelliteCalibrationControl
+                calibration={satelliteCalibration}
+                onAdjust={adjustSatelliteCalibration}
+                onReset={resetSatelliteCalibration}
               />
-              {/* Label at offset position */}
-              <Marker
-                position={[cm.labelLat, cm.labelLng]}
-                icon={createCornerIcon(cm.corner.name, true)}
-                eventHandlers={{
-                  click: (e) => {
-                    L.DomEvent.stopPropagation(e.originalEvent)
-                    handleDeleteCorner(cm.corner.id)
-                  },
-                }}
-              />
-            </span>
-          ))}
-
-          {/* Click handlers */}
-          {!isCornerStage && sfMode === 'manual' && <ClickHandler onClick={handleSFMapClick} />}
-          {isCornerStage && <ClickHandler onClick={handleCornerMapClick} />}
-        </MapContainer>
+            </div>
+          )}
+        </div>
 
         {/* Manual SF hint overlay */}
         {!isCornerStage && sfMode === 'manual' && manualPoints.length < 2 && (

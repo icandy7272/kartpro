@@ -575,6 +575,26 @@ function App() {
     setMatchedProfile(null)
   }, [])
 
+  const handleEditStartFinish = useCallback(() => {
+    if (!currentSession) {
+      return
+    }
+
+    const reconstructedPoints = currentSession.laps.flatMap((lap, index) =>
+      index === 0 ? lap.points : lap.points.slice(1)
+    )
+
+    const profile = findMatchingProfile(reconstructedPoints)
+
+    setCurrentFilename(currentSession.filename)
+    setMatchedProfile(profile)
+    setSmoothedPoints(reconstructedPoints)
+    setAutoDetectedSF(currentSession.startFinishLine ?? detectStartFinishLine(reconstructedPoints))
+    setCurrentSession(null)
+    setProcessingStage('picking-sf')
+    setToast(`已进入起终线编辑：${profile?.name ?? currentSession.filename}`)
+  }, [currentSession])
+
   return (
     <div className="min-h-screen bg-gray-950 text-gray-100">
       {error && (
@@ -642,6 +662,7 @@ function App() {
           session={currentSession}
           aiConfig={aiConfig}
           onAiConfigChange={setAiConfig}
+          onEditStartFinish={handleEditStartFinish}
           onNewSession={handleNewSession}
           onUpdateSession={setCurrentSession}
         />
