@@ -16,7 +16,6 @@ import CornerTable from './CornerTable'
 import AICoach from './AICoach'
 import ComparisonReport from './ComparisonReport'
 import AnalysisReport from './AnalysisReport'
-import RacingLineReport from './RacingLineReport'
 import type { RacingLineAnalysis } from '../types'
 
 interface LayoutProps {
@@ -292,8 +291,6 @@ export default function Layout({ session, aiConfig, onAiConfigChange, onEditStar
     return { brakePoints: brakePts.length > 0 ? brakePts : undefined, throttlePoints: throttlePts.length > 0 ? throttlePts : undefined }
   }, [currentRLA])
 
-  // Theoretical best
-  const theoreticalBest = fullAnalysis.theoreticalBest
   const hasComparison = comparisonLapId !== fastestLap.id
 
   // If in comparison mode, render the comparison report full-screen
@@ -527,171 +524,27 @@ export default function Layout({ session, aiConfig, onAiConfigChange, onEditStar
         {/* Right panel — Scrollable card grid */}
         <div className="flex-1 md:overflow-y-auto p-2 min-h-0">
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-2" style={{ alignContent: 'start' }}>
-
-            {/* Key metrics */}
-            <Card>
-              <CardHeader title="圈速概览" />
-              <div className="p-2.5 space-y-2">
-                <div className="flex items-baseline gap-3">
-                  <div>
-                    <div className="text-[9px] text-gray-500">最快圈 (第{fastestLap.id}圈)</div>
-                    <div className="text-xl font-bold text-purple-400 font-mono">{formatTime(fastestLap.duration)}</div>
-                  </div>
-                  <div>
-                    <div className="text-[9px] text-gray-500">理论最佳</div>
-                    <div className="text-base font-bold text-green-400 font-mono">{formatTime(theoreticalBest.time)}</div>
-                    <div className="text-[10px] text-green-500">-{theoreticalBest.savings.toFixed(3)}s</div>
-                  </div>
-                </div>
-              </div>
-            </Card>
-
-            {/* Corner priority */}
-            <Card className="overflow-y-auto">
-              <CardHeader title="提升优先级" extra={<span className="text-[9px] text-gray-500" title="每个弯道相比最快圈的平均掉时，排名越靠前优化收益越大">按掉时排序 ⓘ</span>} />
-              <div className="p-2 space-y-1">
-                {fullAnalysis.cornerPriority.map((c) => {
-                  const maxDelta = fullAnalysis.cornerPriority[0]?.avgDelta || 0.1
-                  const barWidth = Math.min(100, Math.abs(c.avgDelta) / Math.abs(maxDelta) * 100)
-                  const barColor = c.avgDelta > 0.15 ? 'bg-red-500' : c.avgDelta > 0.05 ? 'bg-yellow-500' : 'bg-green-500'
-                  return (
-                    <div key={c.corner} className="flex items-center gap-1.5 text-[10px]">
-                      <span className="w-5 font-bold text-gray-300 shrink-0">{c.corner}</span>
-                      <div className="flex-1 h-2 bg-gray-800 rounded overflow-hidden">
-                        <div className={`h-full ${barColor} rounded`} style={{ width: `${barWidth}%` }} />
-                      </div>
-                      <span className="w-14 text-right text-gray-400 shrink-0 font-mono">
-                        {c.avgDelta >= 0 ? '+' : ''}{c.avgDelta.toFixed(3)}s
-                      </span>
-                    </div>
-                  )
-                })}
-              </div>
-            </Card>
-
-            {/* Deep analysis — coaching prescription (結果→診斷→處方 flow) */}
             <Card span={2}>
-              <CardHeader title="深度分析" extra={<button onClick={() => setShowAIChat(true)} className="text-[10px] text-purple-400 hover:text-purple-300">AI 教练 →</button>} />
+              <CardHeader title="教练总览" extra={<button onClick={() => setShowAIChat(true)} className="text-[10px] text-purple-400 hover:text-purple-300">AI 教练 →</button>} />
               <div className="p-3">
-                <AnalysisReport analysis={fullAnalysis} />
-                {racingLineAnalyses.length > 0 && (
-                  <div className="mt-2">
-                    <RacingLineReport analyses={racingLineAnalyses} fastestLapId={fastestLap.id} />
-                  </div>
-                )}
+                <AnalysisReport
+                  analysis={fullAnalysis}
+                  comparisonLapId={hasComparison ? comparisonLapId : null}
+                  currentRacingLineAnalysis={hasComparison ? currentRLA : null}
+                  fastestLapId={fastestLap.id}
+                  racingLineAnalyses={racingLineAnalyses}
+                />
               </div>
             </Card>
-
-            {/* === Comparison cards — evidence supporting coach advice === */}
-            {hasComparison && currentRLA && (
-              <>
-                {/* Racing line deviations */}
-                <Card className="overflow-y-auto">
-                  <CardHeader title="走线偏差" extra={<span className="text-[9px] text-purple-400">第{comparisonLapId}圈 vs 第{fastestLap.id}圈</span>} />
-                  <div className="p-2">
-                    <table className="w-full text-[10px]">
-                      <thead>
-                        <tr className="text-gray-500 border-b border-gray-800">
-                          <th className="text-left py-0.5">弯道</th>
-                          <th className="text-right py-0.5">偏差</th>
-                          <th className="text-center py-0.5">一致性</th>
-                        </tr>
-                      </thead>
-                      <tbody>
-                        {currentRLA.corners.map((c) => {
-                          const absM = Math.abs(c.meanDeviation)
-                          const color = absM < 0.5 ? 'text-green-400' : absM < 1.5 ? 'text-yellow-400' : absM < 3 ? 'text-orange-400' : 'text-red-400'
-                          const consColor = c.curvatureConsistency >= 85 ? 'text-green-400' : c.curvatureConsistency >= 65 ? 'text-yellow-400' : 'text-orange-400'
-                          return (
-                            <tr key={c.cornerName} className="border-b border-gray-800/30">
-                              <td className="py-0.5 font-medium text-gray-300">{c.cornerName}</td>
-                              <td className={`text-right py-0.5 ${color}`}>{c.meanDeviation >= 0 ? '+' : ''}{c.meanDeviation.toFixed(2)}m</td>
-                              <td className={`text-center py-0.5 ${consColor}`}>{c.curvatureConsistency}%</td>
-                            </tr>
-                          )
-                        })}
-                      </tbody>
-                    </table>
-                  </div>
-                </Card>
-
-                {/* Brake/throttle card removed — info now in corner trajectory maps */}
-              </>
-            )}
 
             {/* Corner performance table — detailed reference */}
             <Card span={2} className="overflow-y-auto">
+              <CardHeader title="弯道明细表" />
               <CornerTable
                 analyses={session.analyses}
                 selectedLapIds={selectedLapIds}
                 fastestLapId={fastestLap.id}
               />
-            </Card>
-
-            {/* Lap trend — session progression */}
-            {fullAnalysis.lapTrend.laps.length > 0 && (() => {
-              const { laps: trendLaps, trend, peakRange, worstRange } = fullAnalysis.lapTrend
-              const times = trendLaps.map(l => l.time)
-              const minT = Math.min(...times)
-              const maxT = Math.max(...times)
-              const range = maxT - minT || 1
-              const trendLabel = trend === 'improving' ? '持续进步' : trend === 'declining' ? '逐渐下降' : '波动'
-              const trendColor = trend === 'improving' ? 'text-green-400' : trend === 'declining' ? 'text-red-400' : 'text-yellow-400'
-              return (
-                <Card>
-                  <CardHeader title="圈速趋势" extra={<span className={`text-[9px] font-bold ${trendColor}`}>{trendLabel}</span>} />
-                  <div className="p-2">
-                    <div className="text-[9px] text-gray-500 mb-1">最佳: 第{peakRange[0]}-{peakRange[1]}圈 · 最差: 第{worstRange[0]}-{worstRange[1]}圈</div>
-                    <div className="relative h-16">
-                      <div className="absolute inset-0 flex items-end gap-px">
-                        {trendLaps.map((lap) => {
-                          const normalized = (lap.time - minT) / range
-                          const barH = Math.max(8, Math.round((1 - normalized) * 100))
-                          const inPeak = lap.lapNumber >= peakRange[0] && lap.lapNumber <= peakRange[1]
-                          const inWorst = lap.lapNumber >= worstRange[0] && lap.lapNumber <= worstRange[1]
-                          const bg = inPeak ? 'bg-green-500' : inWorst ? 'bg-red-500' : 'bg-purple-500'
-                          return (
-                            <div key={lap.lapNumber} className="flex-1 flex flex-col items-center justify-end h-full" title={`第${lap.lapNumber}圈: ${formatTime(lap.time)}`}>
-                              <div className={`w-full ${bg} rounded-t`} style={{ height: `${barH}%` }} />
-                            </div>
-                          )
-                        })}
-                      </div>
-                    </div>
-                    <div className="flex justify-between text-[8px] text-gray-600 mt-0.5">
-                      {trendLaps.map(l => <span key={l.lapNumber} className="flex-1 text-center">{l.lapNumber}</span>)}
-                    </div>
-                  </div>
-                </Card>
-              )
-            })()}
-
-            {/* Consistency — advanced analysis */}
-            <Card className="overflow-y-auto">
-              <CardHeader title="一致性" />
-              <div className="p-2">
-                <table className="w-full text-[10px]">
-                  <thead>
-                    <tr className="text-gray-500 border-b border-gray-800">
-                      <th className="text-left py-0.5">弯道</th>
-                      <th className="text-right py-0.5">标准差</th>
-                      <th className="text-center py-0.5">评级</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {fullAnalysis.consistency.map((c) => {
-                      const ratingColor = c.rating === '非常稳定' ? 'text-green-400' : c.rating === '稳定' ? 'text-blue-400' : c.rating === '波动' ? 'text-yellow-400' : 'text-red-400'
-                      return (
-                        <tr key={c.corner} className="border-b border-gray-800/30">
-                          <td className="py-0.5 font-medium text-gray-300">{c.corner}</td>
-                          <td className="text-right py-0.5 text-gray-400 font-mono">{c.stdDev.toFixed(3)}s</td>
-                          <td className={`text-center py-0.5 ${ratingColor}`}>{c.rating}</td>
-                        </tr>
-                      )
-                    })}
-                  </tbody>
-                </table>
-              </div>
             </Card>
 
           </div>

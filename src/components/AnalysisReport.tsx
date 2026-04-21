@@ -1,9 +1,15 @@
 import { useState, useRef, useEffect, useCallback } from 'react'
 import { createPortal } from 'react-dom'
 import type { FullAnalysis } from '../lib/analysis/full-analysis'
+import type { RacingLineAnalysis } from '../types'
+import RacingLineReport from './RacingLineReport'
 
 interface AnalysisReportProps {
   analysis: FullAnalysis
+  comparisonLapId?: number | null
+  currentRacingLineAnalysis?: RacingLineAnalysis | null
+  fastestLapId?: number
+  racingLineAnalyses?: RacingLineAnalysis[]
 }
 
 function InfoTip({ text }: { text: string }) {
@@ -148,6 +154,44 @@ function ScoreBar({ score }: { score: number }) {
   )
 }
 
+function MetricTile({
+  label,
+  value,
+  accentClass,
+  sublabel,
+}: {
+  label: string
+  value: string
+  accentClass: string
+  sublabel?: string
+}) {
+  return (
+    <div className="rounded-lg border border-gray-700/40 bg-gray-900/60 p-3">
+      <div className="text-[10px] text-gray-500">{label}</div>
+      <div className={`mt-1 text-lg font-bold ${accentClass}`}>{value}</div>
+      {sublabel && <div className="mt-1 text-[10px] text-gray-500">{sublabel}</div>}
+    </div>
+  )
+}
+
+function ReportBlock({
+  title,
+  eyebrow,
+  children,
+}: {
+  title: string
+  eyebrow?: string
+  children: React.ReactNode
+}) {
+  return (
+    <div className="rounded-lg border border-gray-700/30 bg-gray-900/50 p-3">
+      {eyebrow && <div className="mb-1 text-[10px] font-semibold uppercase tracking-wide text-gray-500">{eyebrow}</div>}
+      <div className="mb-2 text-xs font-bold text-gray-200">{title}</div>
+      {children}
+    </div>
+  )
+}
+
 /**
  * Mini SVG map showing two corner trajectories overlaid for comparison.
  * Gray = fastest overall lap, Purple = best corner lap.
@@ -242,453 +286,636 @@ function CornerTrajectoryMap({ bestLine, refLine, bestLapId, refLapId, bestSpeed
   )
 }
 
-export default function AnalysisReport({ analysis }: AnalysisReportProps) {
+export default function AnalysisReport({
+  analysis,
+  comparisonLapId = null,
+  currentRacingLineAnalysis = null,
+  fastestLapId,
+  racingLineAnalyses = [],
+}: AnalysisReportProps) {
   const {
-    theoreticalBest, fastestVsSlowest, brakingPattern,
-    lapGroups, cornerCorrelation, trainingPlan, cornerScoring, cornerNarrative, trackStrategy,
+    theoreticalBest,
+    fastestVsSlowest,
+    brakingPattern,
+    lapGroups,
+    cornerCorrelation,
+    trainingPlan,
+    cornerScoring,
+    cornerNarrative,
+    trackStrategy,
+    cornerPriority,
+    consistency,
+    lapTrend,
   } = analysis
 
   if (theoreticalBest.perCorner.length === 0) {
     return null
   }
-
-
-  // Lap trend visualization helpers
+  const topPriority = cornerPriority[0] ?? null
+  const topZone = trackStrategy.priorityZones[0] ?? null
+  const roleGroups = [
+    {
+      label: '直道入口弯',
+      corners: trackStrategy.cornerRoles.filter((role) => role.role === '直道入口弯').map((role) => role.corner),
+    },
+    {
+      label: '组合弯',
+      corners: trackStrategy.cornerRoles.filter((role) => role.role === '组合弯').map((role) => role.corner),
+    },
+    {
+      label: '独立弯',
+      corners: trackStrategy.cornerRoles.filter((role) => role.role === '独立弯').map((role) => role.corner),
+    },
+  ].filter((group) => group.corners.length > 0)
 
   return (
     <div className="space-y-2">
-      {/* 1. 教练点评 — 结论先行，车手最需要消化的内容 */}
-      {trackStrategy.overallApproach && (
-        <Section title="教练点评" defaultOpen icon="🗣️">
-          <div className="space-y-3">
-            {/* Overall approach */}
-            <div className="bg-purple-500/10 rounded-lg p-3 border border-purple-500/30">
-              <div className="text-[11px] font-bold text-purple-300 mb-1">整圈主线</div>
-              <p className="text-[11px] text-gray-300 leading-relaxed">{trackStrategy.overallApproach}</p>
+      <Section title="语义确认" defaultOpen icon="🧭" tip="先确认这份页面会先给你方向，再给你证据和细表。">
+        <div className="space-y-3">
+          <div className="grid gap-2 sm:grid-cols-3">
+            <MetricTile
+              label="当前最快圈"
+              value={`第${fastestVsSlowest.fastestLap}圈 ${formatTime(fastestVsSlowest.fastestTime)}`}
+              accentClass="text-purple-400"
+            />
+            <MetricTile
+              label="可回收时间"
+              value={`-${theoreticalBest.savings.toFixed(3)}s`}
+              accentClass="text-green-400"
+              sublabel="代表纯驾驶层面的可挖空间"
+            />
+            <MetricTile
+              label="首要训练对象"
+              value={topZone?.zone ?? topPriority?.corner ?? '待识别'}
+              accentClass="text-yellow-300"
+              sublabel="优先先改最能换来圈速的区域"
+            />
+          </div>
+          <ReportBlock title="这份报告先回答什么" eyebrow="Coach framing">
+            <div className="space-y-1 text-[11px] leading-relaxed text-gray-400">
+              <p>先告诉你整圈应该怎么规划，再指出最值得优先优化的弯段，最后给出今天就能执行的训练动作。</p>
+              <p>证据面板和附录在后面，作用是帮你确认判断，而不是让你自己先从数字里拼结论。</p>
             </div>
+          </ReportBlock>
+        </div>
+      </Section>
 
-            {/* Priority zones */}
-            {trackStrategy.priorityZones.length > 0 && (
+      <Section title="本次教练摘要" defaultOpen icon="🗣️" tip="用最短阅读路径告诉车手：现在最应该先做什么。">
+        <div className="space-y-3">
+          <div className="grid gap-2 sm:grid-cols-3">
+            <MetricTile
+              label="最佳圈速"
+              value={formatTime(fastestVsSlowest.fastestTime)}
+              accentClass="text-purple-400"
+              sublabel={`第${fastestVsSlowest.fastestLap}圈`}
+            />
+            <MetricTile
+              label="理论最佳"
+              value={formatTime(theoreticalBest.time)}
+              accentClass="text-green-400"
+              sublabel={`还能拿回 ${theoreticalBest.savings.toFixed(3)}s`}
+            />
+            <MetricTile
+              label="最大掉时区域"
+              value={topPriority ? `${topPriority.corner} +${topPriority.avgDelta.toFixed(3)}s` : '暂无'}
+              accentClass="text-red-400"
+            />
+          </div>
+
+          <ReportBlock title="本节最该先改的弯段" eyebrow="Priority">
+            {cornerPriority.length > 0 ? (
+              <div className="space-y-1.5">
+                {cornerPriority.slice(0, 3).map((corner, index) => {
+                  const maxDelta = cornerPriority[0]?.avgDelta || 0.1
+                  const barWidth = Math.min(100, Math.abs(corner.avgDelta) / Math.abs(maxDelta) * 100)
+                  return (
+                    <div key={corner.corner} className="flex items-center gap-2 text-[11px]">
+                      <span className="w-5 text-gray-500">{index + 1}</span>
+                      <span className="w-10 font-semibold text-gray-200">{corner.corner}</span>
+                      <div className="h-2 flex-1 overflow-hidden rounded bg-gray-800">
+                        <div className="h-full rounded bg-red-500" style={{ width: `${barWidth}%` }} />
+                      </div>
+                      <span className="w-14 text-right font-mono text-red-400">+{corner.avgDelta.toFixed(3)}s</span>
+                    </div>
+                  )
+                })}
+              </div>
+            ) : (
+              <p className="text-[11px] text-gray-500">当前没有足够的数据生成优先级。</p>
+            )}
+          </ReportBlock>
+
+          <ReportBlock title="训练闭环" eyebrow="Today">
+            {trackStrategy.trainingClosure.length > 0 ? (
+              <div className="space-y-1">
+                {trackStrategy.trainingClosure.map((item, index) => (
+                  <div key={`${item.focus}-${index}`} className="text-[11px] text-gray-400">
+                    <span className="mr-1 text-green-400">{index + 1}.</span>
+                    {item.focus}
+                    <span className="ml-1 text-gray-500">看 {item.metric}，目标 {item.target}</span>
+                  </div>
+                ))}
+              </div>
+            ) : (
+              <p className="text-[11px] text-gray-500">当前还没有形成明确的训练闭环建议。</p>
+            )}
+          </ReportBlock>
+        </div>
+      </Section>
+
+      <Section title="整圈策略" defaultOpen icon="🛣️" tip="从整圈规划视角解释这条赛道应该怎么跑。">
+        <div className="space-y-3">
+          <ReportBlock title="整圈主线" eyebrow="Whole track">
+            <p className="text-[11px] leading-relaxed text-gray-300">
+              {trackStrategy.overallApproach || '当前还没有形成明确的整圈策略结论。'}
+            </p>
+          </ReportBlock>
+
+          {roleGroups.length > 0 && (
+            <ReportBlock title="赛道角色分工" eyebrow="Corner roles">
+              <div className="grid gap-2 sm:grid-cols-3">
+                {roleGroups.map((group) => (
+                  <div key={group.label} className="rounded-lg border border-gray-700/30 bg-black/10 p-2">
+                    <div className="text-[10px] font-semibold text-gray-500">{group.label}</div>
+                    <div className="mt-1 text-[11px] text-gray-300">{group.corners.join('、')}</div>
+                  </div>
+                ))}
+              </div>
+            </ReportBlock>
+          )}
+
+          <ReportBlock title="重点区域（按收益排序）" eyebrow="Zones">
+            {trackStrategy.priorityZones.length > 0 ? (
               <div className="space-y-2">
-                <div className="text-[11px] font-bold text-gray-400">重点区域（按 ROI 排序）</div>
                 {trackStrategy.priorityZones.map((zone) => (
-                  <div key={zone.zone} className="bg-gray-900/50 rounded-lg p-3 border border-gray-700/30">
-                    <div className="flex items-center gap-2 mb-2">
-                      <span className="w-5 h-5 rounded-full bg-purple-500/30 text-purple-300 text-[10px] font-bold flex items-center justify-center border border-purple-500/50">
+                  <div key={zone.zone} className="rounded-lg border border-gray-700/30 bg-black/10 p-3">
+                    <div className="mb-2 flex items-center gap-2">
+                      <span className="flex h-5 w-5 items-center justify-center rounded-full border border-purple-500/50 bg-purple-500/20 text-[10px] font-bold text-purple-300">
                         {zone.priority}
                       </span>
                       <span className="text-xs font-bold text-gray-200">{zone.zone}</span>
-                      <span className="text-[10px] text-green-400 ml-auto">{zone.targetGain}</span>
+                      <span className="ml-auto text-[10px] text-green-400">{zone.targetGain}</span>
                     </div>
-                    <div className="space-y-1 pl-7">
-                      <div className="text-[11px] text-gray-400"><span className="text-yellow-400">症状：</span>{zone.symptom}</div>
-                      <div className="text-[11px] text-gray-400"><span className="text-orange-400">根因：</span>{zone.rootCause}</div>
-                      <div className="text-[11px] text-gray-400"><span className="text-cyan-400">练法：</span>{zone.practice}</div>
+                    <div className="space-y-1 text-[11px] text-gray-400">
+                      <div><span className="text-yellow-400">症状：</span>{zone.symptom}</div>
+                      <div><span className="text-orange-400">根因：</span>{zone.rootCause}</div>
+                      <div><span className="text-cyan-400">练法：</span>{zone.practice}</div>
                     </div>
                   </div>
                 ))}
               </div>
+            ) : (
+              <p className="text-[11px] text-gray-500">当前没有识别出清晰的重点收益区。</p>
             )}
-
-            {/* Per-corner detailed coaching */}
-            {cornerNarrative.length > 0 && (
-              <div className="space-y-2">
-                <div className="text-[11px] font-bold text-gray-400">逐弯点评</div>
-                {cornerNarrative
-                  .map((c) => {
-                    const cr = trackStrategy.cornerRoles.find(r => r.corner === c.corner)
-                    const roleLabel = cr?.role === '直道入口弯' ? '🏁 直道入口弯'
-                      : cr?.role === '组合弯' ? '🔗 组合弯'
-                      : ''
-                    return (
-                      <div key={c.corner} className="bg-gray-900/50 rounded-lg p-3 border border-gray-700/30">
-                        <div className="flex items-center gap-2 mb-1.5">
-                          <span className="text-xs font-bold text-gray-200">{c.corner}</span>
-                          {roleLabel && (
-                            <span className="text-[10px] text-gray-500">{roleLabel}</span>
-                          )}
-                        </div>
-                        <div className="space-y-1">
-                          {c.comments.map((comment, i) => (
-                            <p key={i} className="text-[11px] text-gray-400 pl-2 border-l-2 border-purple-500/50">
-                              {comment}
-                            </p>
-                          ))}
-                        </div>
-                      </div>
-                    )
-                  })}
-              </div>
-            )}
-
-            {/* Training closure */}
-            {trackStrategy.trainingClosure.length > 0 && (
-              <div className="bg-green-500/10 rounded-lg p-3 border border-green-500/30">
-                <div className="text-[11px] font-bold text-green-300 mb-1">训练闭环</div>
-                <div className="space-y-1">
-                  {trackStrategy.trainingClosure.map((tc, i) => (
-                    <div key={i} className="text-[11px] text-gray-400">
-                      <span className="text-green-400">{i + 1}.</span> {tc.focus}
-                      <span className="text-gray-500 ml-1">（看 {tc.metric}，目标：{tc.target}）</span>
-                    </div>
-                  ))}
-                </div>
-              </div>
-            )}
-          </div>
-        </Section>
-      )}
-
-      {/* 2. 理论最佳圈 — 量化目标，支撑教练点评的数字依据 */}
-      <Section title="理论最佳圈" icon="🏆" tip="将每个弯道在所有圈中的最快耗时拼接起来，得到理论上的最快圈速。差值越大说明潜力越大。" defaultOpen>
-        <div className="flex items-baseline gap-4 mb-3">
-          <div>
-            <div className="text-[10px] text-gray-500">理论最佳</div>
-            <div className="text-2xl font-bold text-purple-400">{formatTime(theoreticalBest.time)}</div>
-          </div>
-          <div>
-            <div className="inline-flex items-center text-[10px] text-gray-500">可节省<InfoTip text="最快圈与理论最佳圈的差值，代表纯技术提升空间" /></div>
-            <div className="text-lg font-bold text-green-400">-{theoreticalBest.savings.toFixed(3)}s</div>
-          </div>
+          </ReportBlock>
         </div>
-        <table className="w-full text-xs border-collapse">
-          <thead>
-            <tr className="text-gray-500 border-b border-gray-700">
-              <th className="text-left py-1 pr-2">弯道</th>
-              <th className="text-right py-1 pr-2"><span className="inline-flex items-center justify-end">最佳时间<InfoTip text="该弯道在所有圈中的最快耗时" /></span></th>
-              <th className="text-right py-1 pr-2">来自</th>
-              <th className="text-right py-1 pr-2"><span className="inline-flex items-center justify-end">节省<InfoTip text="相比最快整圈在该弯道可以节省的时间" /></span></th>
-              <th className="text-left py-1"><span className="inline-flex items-center justify-start">为什么更快<InfoTip text="该弯道最快的那一圈，跟最快整圈在同一弯道相比，速度上有什么不同。注意：速度更高不一定时间更短，走线更紧凑可以用更低的速度换来更短的距离。" /></span></th>
-            </tr>
-          </thead>
-          <tbody>
-            {theoreticalBest.perCorner.map((c) => (
-              <tr key={c.corner} className="border-b border-gray-800/50 text-gray-400">
-                <td className="py-1.5 pr-2 font-medium text-gray-300">{c.corner}</td>
-                <td className="text-right py-1.5 pr-2">{c.bestTime.toFixed(3)}s</td>
-                <td className="text-right py-1.5 pr-2 text-gray-500">第{c.bestLap}圈</td>
-                <td className="text-right py-1.5 pr-2">
-                  {c.savedVsFastest > 0.001 ? (
-                    <span className="text-green-400">-{c.savedVsFastest.toFixed(3)}s</span>
-                  ) : (
-                    <span className="text-gray-600">—</span>
-                  )}
-                </td>
-                <td className="py-1.5 text-[10px] text-gray-500">
-                  <div>速度: 入弯{c.bestEntry >= c.refEntry ? '+' : ''}{(c.bestEntry - c.refEntry).toFixed(1)} 弯心{c.bestMin >= c.refMin ? '+' : ''}{(c.bestMin - c.refMin).toFixed(1)} 出弯{c.bestExit >= c.refExit ? '+' : ''}{(c.bestExit - c.refExit).toFixed(1)} km/h</div>
-                  {c.lineNote && <div className="text-purple-400/70 mt-0.5">{c.lineNote}</div>}
-                  {c.bestLine && c.refLine && c.bestLap !== fastestVsSlowest.fastestLap && (
-                    <CornerTrajectoryMap
-                      bestLine={c.bestLine}
-                      refLine={c.refLine}
-                      bestLapId={c.bestLap}
-                      refLapId={fastestVsSlowest.fastestLap}
-                      bestSpeeds={{ entry: c.bestEntry, min: c.bestMin, exit: c.bestExit }}
-                      refSpeeds={{ entry: c.refEntry, min: c.refMin, exit: c.refExit }}
-                    />
-                  )}
-                </td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
       </Section>
 
-      {/* 3. 训练计划 — 知道目标后，下一步怎么练 */}
-      {trainingPlan.length > 0 && (
-        <Section title="训练计划" defaultOpen icon="📝">
-          <div className="space-y-3">
-            {trainingPlan.map((stint) => (
-              <div key={stint.stint} className="bg-gray-900/50 rounded-lg p-3 border border-gray-700/30">
-                <div className="flex items-center gap-2 mb-2">
-                  <span className="w-6 h-6 rounded-full bg-purple-500/30 text-purple-300 text-xs font-bold flex items-center justify-center border border-purple-500/50">
-                    {stint.stint}
-                  </span>
-                  <div>
-                    <div className="text-sm font-bold text-gray-200">{stint.title}</div>
-                    <div className="text-[10px] text-gray-500">
-                      重点: <span className="text-purple-300">{stint.focus}</span> · 目标: {stint.goal}
-                    </div>
+      <Section title="重点弯道点评" defaultOpen icon="🎯" tip="把世界一流教练会先盯的弯段逐个讲清楚。">
+        <div className="space-y-2">
+          {cornerNarrative.length > 0 ? (
+            cornerNarrative.map((corner) => {
+              const role = trackStrategy.cornerRoles.find((item) => item.corner === corner.corner)
+              const roleLabel = role?.role === '直道入口弯'
+                ? '🏁 直道入口弯'
+                : role?.role === '组合弯'
+                  ? '🔗 组合弯'
+                  : role?.role === '独立弯'
+                    ? '📍 独立弯'
+                    : ''
+              return (
+                <ReportBlock key={corner.corner} title={corner.corner} eyebrow={roleLabel || undefined}>
+                  <div className="space-y-1">
+                    {corner.comments.map((comment, index) => (
+                      <p key={index} className="border-l-2 border-purple-500/50 pl-2 text-[11px] text-gray-400">
+                        {comment}
+                      </p>
+                    ))}
                   </div>
+                </ReportBlock>
+              )
+            })
+          ) : (
+            <ReportBlock title="暂无逐弯点评">
+              <p className="text-[11px] text-gray-500">当前数据还不足以生成逐弯教练点评。</p>
+            </ReportBlock>
+          )}
+        </div>
+      </Section>
+
+      <Section title="训练计划" defaultOpen icon="📝" tip="把整圈策略落成可以在下一组练习里执行的动作。">
+        <div className="space-y-3">
+          {trainingPlan.length > 0 ? (
+            trainingPlan.map((stint) => (
+              <ReportBlock key={stint.stint} title={stint.title} eyebrow={`Stint ${stint.stint}`}>
+                <div className="mb-2 text-[11px] text-gray-400">
+                  重点 <span className="text-purple-300">{stint.focus}</span>
+                  <span className="mx-1 text-gray-600">/</span>
+                  目标 {stint.goal}
                 </div>
-                <div className="space-y-1 pl-8">
-                  {stint.targets.map((target, i) => (
-                    <div key={i} className="flex items-start gap-1.5 text-[11px] text-gray-400">
-                      <span className="text-purple-400 shrink-0 mt-px">•</span>
+                <div className="space-y-1">
+                  {stint.targets.map((target, index) => (
+                    <div key={index} className="flex items-start gap-1.5 text-[11px] text-gray-400">
+                      <span className="mt-px shrink-0 text-purple-400">•</span>
                       <span>{target}</span>
                     </div>
                   ))}
                 </div>
-              </div>
-            ))}
-          </div>
-        </Section>
-      )}
-
-      {/* 4. Fastest vs Slowest — supporting data */}
-      <Section title="最快 vs 最慢圈" defaultOpen icon="⚡" tip="对比最快圈和最慢圈在每个弯道的耗时差异，找出最慢圈掉时最多的弯道。">
-        <div className="flex items-center gap-4 mb-3 text-xs">
-          <div>
-            <span className="text-gray-500">最快: </span>
-            <span className="text-green-400 font-bold">第{fastestVsSlowest.fastestLap}圈 {formatTime(fastestVsSlowest.fastestTime)}</span>
-          </div>
-          <div>
-            <span className="text-gray-500">最慢: </span>
-            <span className="text-red-400 font-bold">第{fastestVsSlowest.slowestLap}圈 {formatTime(fastestVsSlowest.slowestTime)}</span>
-          </div>
-          <div>
-            <span className="text-gray-500">差距: </span>
-            <span className="text-yellow-400 font-bold">{fastestVsSlowest.totalDelta.toFixed(3)}s</span>
-          </div>
-        </div>
-        <div className="space-y-1.5">
-          {fastestVsSlowest.perCorner.map((c) => {
-            const absPct = Math.abs(c.percentage)
-            const barColor = absPct > 20 ? 'bg-red-500' : absPct > 10 ? 'bg-yellow-500' : 'bg-gray-500'
-            return (
-              <div key={c.corner} className="flex items-center gap-2 text-xs">
-                <span className="w-7 font-bold text-gray-200 shrink-0">{c.corner}</span>
-                <div className="flex-1 flex items-center gap-1">
-                  <span className="w-14 text-right text-green-400 shrink-0">{c.fastestTime.toFixed(3)}s</span>
-                  <div className="flex-1 h-2.5 bg-gray-700/50 rounded overflow-hidden">
-                    <div
-                      className={`h-full ${barColor} rounded`}
-                      style={{ width: `${Math.min(100, absPct)}%` }}
-                    />
-                  </div>
-                  <span className="w-14 text-left text-red-400 shrink-0">{c.slowestTime.toFixed(3)}s</span>
-                </div>
-                <span className="w-10 text-right text-gray-500 shrink-0 text-[10px]">
-                  {c.percentage.toFixed(0)}%
-                </span>
-              </div>
-            )
-          })}
+              </ReportBlock>
+            ))
+          ) : (
+            <ReportBlock title="暂无训练计划">
+              <p className="text-[11px] text-gray-500">当前还没有生成可执行的训练计划。</p>
+            </ReportBlock>
+          )}
         </div>
       </Section>
 
-      {/* 6. Braking/Acceleration Pattern with Apex Geometry */}
-      <Section title="弯道几何 & 刹车/加速" defaultOpen icon="🛞" tip="分析每个弯道的制动和加速模式，包括弯心位置、入弯减速量和出弯加速量。">
+      <Section title="证据面板" icon="🔬" tip="在这里验证前面的教练判断为什么成立。" defaultOpen={false}>
         <div className="space-y-3">
-          {brakingPattern.map((c) => (
-            <div key={c.corner} className="bg-gray-900/50 rounded-lg p-3 border border-gray-700/30">
-              {/* Corner header */}
-              <div className="flex items-center justify-between mb-2">
-                <div className="flex items-center gap-2">
-                  <span className="text-sm font-bold text-gray-200">{c.corner}</span>
-                  <span className="text-xs text-gray-500">
-                    {c.direction === '左' ? '↰ 左弯' : '↱ 右弯'} · {c.angle}° · {c.type}
-                  </span>
-                </div>
-                <div className="flex items-center gap-2">
-                  <DiagnosisBadge diagnosis={c.diagnosis} />
-                  <span className={`text-[10px] px-1.5 py-0.5 rounded ${
-                    c.apexPosition === '早弯心' ? 'bg-blue-900/50 text-blue-300' :
-                    c.apexPosition === '晚弯心' ? 'bg-orange-900/50 text-orange-300' :
-                    'bg-gray-700/50 text-gray-400'
-                  }`}>{c.apexPosition}</span>
-                </div>
-              </div>
+          {racingLineAnalyses.length > 0 && fastestLapId !== undefined && (
+            <ReportBlock title="整圈走线证据" eyebrow="Racing line">
+              <RacingLineReport analyses={racingLineAnalyses} fastestLapId={fastestLapId} />
+            </ReportBlock>
+          )}
 
-              {/* Speed profile: Entry → Apex → Min → Exit */}
-              <div className="flex items-center gap-1 text-xs mb-2">
-                <div className="flex flex-col items-center">
-                  <span className="w-3 h-3 rounded-full bg-blue-500 border border-white mb-0.5" />
-                  <span className="text-gray-500">入弯</span>
-                  <span className="text-gray-300 font-mono">{c.entrySpeed.toFixed(1)}</span>
-                </div>
-                <div className="flex-1 h-px bg-gray-700 relative">
-                  <span className={`absolute -top-3 left-1/2 -translate-x-1/2 text-[10px] ${c.brakingIntensity > 10 ? 'text-yellow-400' : 'text-gray-500'}`}>
-                    -{c.brakingIntensity.toFixed(1)} km/h
-                  </span>
-                </div>
-                <div className="flex flex-col items-center">
-                  <span className="w-3.5 h-3.5 rounded-full bg-red-500 border border-white mb-0.5" />
-                  <span className="text-gray-500">弯心</span>
-                  <span className="text-gray-300 font-mono">{c.apexSpeed}</span>
-                </div>
-                <div className="flex-1 h-px bg-gray-700 relative">
-                  <span className={`absolute -top-3 left-1/2 -translate-x-1/2 text-[10px] inline-flex items-center ${c.exitAcceleration < 0 ? 'text-red-400' : 'text-green-400'}`}>
-                    {c.exitAcceleration >= 0 ? '+' : ''}{c.exitAcceleration.toFixed(1)} km/h<InfoTip text="出弯速度减去弯心速度。负值表示出弯还在减速，说明 apex 后仍在转向" />
-                  </span>
-                </div>
-                <div className="flex flex-col items-center">
-                  <span className="w-3 h-3 rounded-full bg-cyan-500 border border-white mb-0.5" />
-                  <span className="text-gray-500">出弯</span>
-                  <span className="text-gray-300 font-mono">{c.exitSpeed.toFixed(1)}</span>
-                </div>
-              </div>
+          {currentRacingLineAnalysis && comparisonLapId !== null && fastestLapId !== undefined && (
+            <ReportBlock title={`第${comparisonLapId}圈 vs 第${fastestLapId}圈`} eyebrow="Selected comparison">
+              <table className="w-full text-[10px]">
+                <thead>
+                  <tr className="border-b border-gray-800 text-gray-500">
+                    <th className="py-1 text-left">弯道</th>
+                    <th className="py-1 text-right">偏差</th>
+                    <th className="py-1 text-center">一致性</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {currentRacingLineAnalysis.corners.map((corner) => {
+                    const absDeviation = Math.abs(corner.meanDeviation)
+                    const deviationColor = absDeviation < 0.5 ? 'text-green-400' : absDeviation < 1.5 ? 'text-yellow-400' : 'text-red-400'
+                    const consistencyColor = corner.curvatureConsistency >= 85 ? 'text-green-400' : corner.curvatureConsistency >= 65 ? 'text-yellow-400' : 'text-red-400'
+                    return (
+                      <tr key={corner.cornerName} className="border-b border-gray-800/30">
+                        <td className="py-1 font-medium text-gray-300">{corner.cornerName}</td>
+                        <td className={`py-1 text-right ${deviationColor}`}>
+                          {corner.meanDeviation >= 0 ? '+' : ''}{corner.meanDeviation.toFixed(2)}m
+                        </td>
+                        <td className={`py-1 text-center ${consistencyColor}`}>{corner.curvatureConsistency}%</td>
+                      </tr>
+                    )
+                  })}
+                </tbody>
+              </table>
+            </ReportBlock>
+          )}
 
-              {/* Apex position bar */}
-              <div className="mb-1.5">
-                <div className="flex items-center gap-2 text-[10px] text-gray-500 mb-0.5">
-                  <span className="inline-flex items-center">弯心位置<InfoTip text="弯心在弯道中的相对位置。早弯心(<35%)适合高速弯，晚弯心(>65%)适合慢进快出策略" /></span>
-                  <span>{c.brakingPhaseRatio}%</span>
-                </div>
-                <div className="h-1.5 bg-gray-700 rounded-full overflow-hidden">
-                  <div
-                    className="h-full bg-red-500 rounded-full"
-                    style={{ width: `${c.brakingPhaseRatio}%` }}
-                  />
-                </div>
-                <div className="flex justify-between text-[9px] text-gray-600 mt-0.5">
-                  <span>入弯</span>
-                  <span>出弯</span>
-                </div>
-              </div>
+          <ReportBlock title="弯道几何与刹车/加速证据" eyebrow="Geometry">
+            <div className="space-y-3">
+              {brakingPattern.map((corner) => (
+                <div key={corner.corner} className="rounded-lg border border-gray-700/30 bg-black/10 p-3">
+                  <div className="mb-2 flex items-center justify-between">
+                    <div className="flex items-center gap-2">
+                      <span className="text-sm font-bold text-gray-200">{corner.corner}</span>
+                      <span className="text-xs text-gray-500">
+                        {corner.direction === '左' ? '↰ 左弯' : '↱ 右弯'} · {corner.angle}° · {corner.type}
+                      </span>
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <DiagnosisBadge diagnosis={corner.diagnosis} />
+                      <span className={`rounded px-1.5 py-0.5 text-[10px] ${
+                        corner.apexPosition === '早弯心'
+                          ? 'bg-blue-900/50 text-blue-300'
+                          : corner.apexPosition === '晚弯心'
+                            ? 'bg-orange-900/50 text-orange-300'
+                            : 'bg-gray-700/50 text-gray-400'
+                      }`}>{corner.apexPosition}</span>
+                    </div>
+                  </div>
 
-              {/* Detailed diagnosis */}
-              {c.detailedDiagnosis.length > 0 && (
-                <div className="mt-2 space-y-1">
-                  {c.detailedDiagnosis.map((d, i) => (
-                    <p key={i} className="text-[11px] text-gray-500 pl-2 border-l-2 border-gray-700">
-                      {d}
-                    </p>
-                  ))}
+                  <div className="mb-2 flex items-center gap-1 text-xs">
+                    <div className="flex flex-col items-center">
+                      <span className="mb-0.5 h-3 w-3 rounded-full border border-white bg-blue-500" />
+                      <span className="text-gray-500">入弯</span>
+                      <span className="font-mono text-gray-300">{corner.entrySpeed.toFixed(1)}</span>
+                    </div>
+                    <div className="relative h-px flex-1 bg-gray-700">
+                      <span className={`absolute left-1/2 top-[-12px] -translate-x-1/2 text-[10px] ${corner.brakingIntensity > 10 ? 'text-yellow-400' : 'text-gray-500'}`}>
+                        -{corner.brakingIntensity.toFixed(1)} km/h
+                      </span>
+                    </div>
+                    <div className="flex flex-col items-center">
+                      <span className="mb-0.5 h-3.5 w-3.5 rounded-full border border-white bg-red-500" />
+                      <span className="text-gray-500">弯心</span>
+                      <span className="font-mono text-gray-300">{corner.apexSpeed.toFixed(1)}</span>
+                    </div>
+                    <div className="relative h-px flex-1 bg-gray-700">
+                      <span className={`absolute left-1/2 top-[-12px] -translate-x-1/2 text-[10px] ${corner.exitAcceleration < 0 ? 'text-red-400' : 'text-green-400'}`}>
+                        {corner.exitAcceleration >= 0 ? '+' : ''}{corner.exitAcceleration.toFixed(1)} km/h
+                      </span>
+                    </div>
+                    <div className="flex flex-col items-center">
+                      <span className="mb-0.5 h-3 w-3 rounded-full border border-white bg-cyan-500" />
+                      <span className="text-gray-500">出弯</span>
+                      <span className="font-mono text-gray-300">{corner.exitSpeed.toFixed(1)}</span>
+                    </div>
+                  </div>
+
+                  <div className="mb-1.5">
+                    <div className="mb-0.5 flex items-center gap-2 text-[10px] text-gray-500">
+                      <span className="inline-flex items-center">弯心位置<InfoTip text="弯心在弯道中的相对位置。早弯心(<35%)适合高速弯，晚弯心(>65%)适合慢进快出策略" /></span>
+                      <span>{corner.brakingPhaseRatio}%</span>
+                    </div>
+                    <div className="h-1.5 overflow-hidden rounded-full bg-gray-700">
+                      <div className="h-full rounded-full bg-red-500" style={{ width: `${corner.brakingPhaseRatio}%` }} />
+                    </div>
+                  </div>
+
+                  {corner.detailedDiagnosis.length > 0 && (
+                    <div className="space-y-1">
+                      {corner.detailedDiagnosis.map((detail, index) => (
+                        <p key={index} className="border-l-2 border-gray-700 pl-2 text-[11px] text-gray-500">
+                          {detail}
+                        </p>
+                      ))}
+                    </div>
+                  )}
                 </div>
-              )}
+              ))}
             </div>
-          ))}
+          </ReportBlock>
+
+          <ReportBlock title="快慢圈组证据" eyebrow="Lap groups">
+            {lapGroups.quickLaps.length > 0 && lapGroups.slowLaps.length > 0 ? (
+              <div className="space-y-3">
+                <div className="flex flex-wrap items-center gap-6">
+                  <div className="text-center">
+                    <div className="text-[10px] text-gray-500">快圈组 ({lapGroups.quickLaps.length}圈) 平均</div>
+                    <div className="text-2xl font-bold text-green-400">{formatTime(lapGroups.quickAvg)}</div>
+                    <div className="text-[10px] text-gray-600">第 {lapGroups.quickLaps.join(', ')} 圈</div>
+                  </div>
+                  <div className="text-center">
+                    <div className="text-[10px] text-gray-500">差距</div>
+                    <div className="text-lg font-bold text-yellow-400">+{lapGroups.gap.toFixed(3)}s</div>
+                  </div>
+                  <div className="text-center">
+                    <div className="text-[10px] text-gray-500">慢圈组 ({lapGroups.slowLaps.length}圈) 平均</div>
+                    <div className="text-2xl font-bold text-red-400">{formatTime(lapGroups.slowAvg)}</div>
+                    <div className="text-[10px] text-gray-600">第 {lapGroups.slowLaps.join(', ')} 圈</div>
+                  </div>
+                </div>
+
+                <div className="space-y-1.5">
+                  {[...lapGroups.perCorner].sort((a, b) => b.gap - a.gap).map((corner) => {
+                    const maxGap = Math.max(...lapGroups.perCorner.map((item) => item.gap)) || 0.1
+                    const barWidth = Math.min(100, (Math.max(0, corner.gap) / maxGap) * 100)
+                    const barColor = corner.gap > 0.2 ? 'bg-red-500' : corner.gap > 0.1 ? 'bg-yellow-500' : 'bg-gray-500'
+                    return (
+                      <div key={corner.corner} className="flex items-center gap-2 text-xs">
+                        <span className="w-7 shrink-0 font-bold text-gray-200">{corner.corner}</span>
+                        <div className="h-3.5 flex-1 overflow-hidden rounded bg-gray-700/50">
+                          <div className={`h-full rounded ${barColor}`} style={{ width: `${barWidth}%` }} />
+                        </div>
+                        <span className="w-16 shrink-0 text-right text-gray-400">+{corner.gap.toFixed(3)}s</span>
+                      </div>
+                    )
+                  })}
+                </div>
+              </div>
+            ) : (
+              <p className="text-[11px] text-gray-500">当前圈数不足，无法形成快慢圈组对比。</p>
+            )}
+          </ReportBlock>
         </div>
       </Section>
 
-      {/* 7. Quick vs Slow Lap Group Analysis */}
-      {lapGroups.quickLaps.length > 0 && lapGroups.slowLaps.length > 0 && (
-        <Section title="快慢圈组分析" defaultOpen icon="🔀" tip="将所有圈分为快圈组和慢圈组，对比两组在每个弯道的表现差异。">
-          <div className="flex items-center gap-6 mb-2">
-            <div className="text-center">
-              <div className="text-[10px] text-gray-500">快圈组 ({lapGroups.quickLaps.length}圈) 平均</div>
-              <div className="text-2xl font-bold text-green-400">{formatTime(lapGroups.quickAvg)}</div>
-              <div className="text-[10px] text-gray-600">第 {lapGroups.quickLaps.join(', ')} 圈</div>
-            </div>
-            <div className="text-center">
-              <div className="text-[10px] text-gray-500">差距</div>
-              <div className="text-lg font-bold text-yellow-400">+{lapGroups.gap.toFixed(3)}s</div>
-            </div>
-            <div className="text-center">
-              <div className="text-[10px] text-gray-500">慢圈组 ({lapGroups.slowLaps.length}圈) 平均</div>
-              <div className="text-2xl font-bold text-red-400">{formatTime(lapGroups.slowAvg)}</div>
-              <div className="text-[10px] text-gray-600">第 {lapGroups.slowLaps.join(', ')} 圈</div>
-            </div>
-          </div>
-          <div className="text-[10px] text-gray-500 mb-2">各弯道快慢圈差距（按差距排序）</div>
-          <div className="space-y-1.5 mb-4">
-            {[...lapGroups.perCorner].sort((a, b) => b.gap - a.gap).map((c) => {
-              const maxGap = Math.max(...lapGroups.perCorner.map((p) => p.gap)) || 0.1
-              const barWidth = Math.min(100, (Math.max(0, c.gap) / maxGap) * 100)
-              const barColor = c.gap > 0.2 ? 'bg-red-500' : c.gap > 0.1 ? 'bg-yellow-500' : 'bg-gray-500'
+      <Section title="车手状态" icon="🫀" tip="看今天的发挥曲线和稳定性，而不是只看单圈最好成绩。" defaultOpen={false}>
+        <div className="space-y-3">
+          <ReportBlock title="圈速趋势" eyebrow="Trend">
+            {lapTrend.laps.length > 0 ? (() => {
+              const times = lapTrend.laps.map((lap) => lap.time)
+              const minTime = Math.min(...times)
+              const maxTime = Math.max(...times)
+              const range = maxTime - minTime || 1
+              const trendLabel = lapTrend.trend === 'improving' ? '持续进步' : lapTrend.trend === 'declining' ? '逐渐下降' : '波动'
+              const trendColor = lapTrend.trend === 'improving' ? 'text-green-400' : lapTrend.trend === 'declining' ? 'text-red-400' : 'text-yellow-400'
               return (
-                <div key={c.corner} className="flex items-center gap-2 text-xs">
-                  <span className="w-7 font-bold text-gray-200 shrink-0">{c.corner}</span>
-                  <div className="flex-1 h-3.5 bg-gray-700/50 rounded overflow-hidden">
-                    <div className={`h-full ${barColor} rounded`} style={{ width: `${barWidth}%` }} />
+                <>
+                  <div className={`mb-1 text-[11px] font-semibold ${trendColor}`}>{trendLabel}</div>
+                  <div className="mb-1 text-[10px] text-gray-500">
+                    最佳窗口 第{lapTrend.peakRange[0]}-{lapTrend.peakRange[1]}圈，最差窗口 第{lapTrend.worstRange[0]}-{lapTrend.worstRange[1]}圈
                   </div>
-                  <span className="w-16 text-right text-gray-400 shrink-0">
-                    +{c.gap.toFixed(3)}s
-                  </span>
-                </div>
+                  <div className="relative h-16">
+                    <div className="absolute inset-0 flex items-end gap-px">
+                      {lapTrend.laps.map((lap) => {
+                        const normalized = (lap.time - minTime) / range
+                        const barHeight = Math.max(8, Math.round((1 - normalized) * 100))
+                        const inPeak = lap.lapNumber >= lapTrend.peakRange[0] && lap.lapNumber <= lapTrend.peakRange[1]
+                        const inWorst = lap.lapNumber >= lapTrend.worstRange[0] && lap.lapNumber <= lapTrend.worstRange[1]
+                        const bg = inPeak ? 'bg-green-500' : inWorst ? 'bg-red-500' : 'bg-purple-500'
+                        return (
+                          <div key={lap.lapNumber} className="flex h-full flex-1 flex-col items-center justify-end" title={`第${lap.lapNumber}圈: ${formatTime(lap.time)}`}>
+                            <div className={`w-full rounded-t ${bg}`} style={{ height: `${barHeight}%` }} />
+                          </div>
+                        )
+                      })}
+                    </div>
+                  </div>
+                </>
               )
-            })}
-          </div>
-          {/* Speed comparison for top 3 gap corners */}
-          <div className="text-[10px] text-gray-500 mb-2">差距最大弯道速度对比 (km/h)</div>
-          <div className="space-y-2">
-            {[...lapGroups.perCorner].sort((a, b) => b.gap - a.gap).slice(0, 3).map((c) => (
-              <div key={c.corner} className="bg-gray-900/50 rounded p-2 border border-gray-700/30">
-                <div className="text-xs font-bold text-gray-200 mb-1">{c.corner}</div>
-                <div className="grid grid-cols-4 gap-1 text-[10px]">
-                  <div className="text-gray-500"></div>
-                  <div className="text-gray-500 text-center">入弯</div>
-                  <div className="text-gray-500 text-center">最低</div>
-                  <div className="text-gray-500 text-center">出弯</div>
-                  <div className="text-green-400">快圈组</div>
-                  <div className="text-center text-gray-300">{c.quickSpeeds.entry.toFixed(1)}</div>
-                  <div className="text-center text-gray-300">{c.quickSpeeds.min.toFixed(1)}</div>
-                  <div className="text-center text-gray-300">{c.quickSpeeds.exit.toFixed(1)}</div>
-                  <div className="text-red-400">慢圈组</div>
-                  <div className="text-center text-gray-300">{c.slowSpeeds.entry.toFixed(1)}</div>
-                  <div className="text-center text-gray-300">{c.slowSpeeds.min.toFixed(1)}</div>
-                  <div className="text-center text-gray-300">{c.slowSpeeds.exit.toFixed(1)}</div>
-                </div>
-              </div>
-            ))}
-          </div>
-        </Section>
-      )}
+            })() : (
+              <p className="text-[11px] text-gray-500">当前圈数不足，无法识别趋势。</p>
+            )}
+          </ReportBlock>
 
-      {/* 8. Corner-to-Laptime Correlation */}
-      {cornerCorrelation.length > 0 && (
-        <Section title="弯道-圈速相关性" defaultOpen icon="🔗">
-          <table className="w-full text-xs border-collapse">
-            <thead>
-              <tr className="text-gray-500 border-b border-gray-700">
-                <th className="text-left py-1 pr-2">弯道</th>
-                <th className="text-right py-1 pr-2"><span className="inline-flex items-center justify-end">相关系数<InfoTip text="该弯道耗时与总圈速的相关系数。越接近1说明该弯道对圈速影响越大" /></span></th>
-                <th className="text-center py-1">显著性</th>
-              </tr>
-            </thead>
-            <tbody>
-              {[...cornerCorrelation].sort((a, b) => Math.abs(b.correlation) - Math.abs(a.correlation)).map((c) => (
-                <tr
-                  key={c.corner}
-                  className={`border-b border-gray-800/50 ${
-                    Math.abs(c.correlation) > 0.7 ? 'text-red-300' : 'text-gray-400'
-                  }`}
-                >
-                  <td className="py-1 pr-2 font-medium text-gray-300">{c.corner}</td>
-                  <td className="text-right py-1 pr-2 font-mono">{c.correlation.toFixed(3)}</td>
-                  <td className="text-center py-1">
-                    <SignificanceBadge significance={c.significance} />
-                  </td>
+          <ReportBlock title="稳定性" eyebrow="Consistency">
+            {consistency.length > 0 ? (
+              <table className="w-full text-[10px]">
+                <thead>
+                  <tr className="border-b border-gray-800 text-gray-500">
+                    <th className="py-1 text-left">弯道</th>
+                    <th className="py-1 text-right">标准差</th>
+                    <th className="py-1 text-center">评级</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {consistency.map((corner) => {
+                    const ratingColor = corner.rating === '非常稳定' ? 'text-green-400' : corner.rating === '稳定' ? 'text-blue-400' : corner.rating === '波动' ? 'text-yellow-400' : 'text-red-400'
+                    return (
+                      <tr key={corner.corner} className="border-b border-gray-800/30">
+                        <td className="py-1 font-medium text-gray-300">{corner.corner}</td>
+                        <td className="py-1 text-right font-mono text-gray-400">{corner.stdDev.toFixed(3)}s</td>
+                        <td className={`py-1 text-center ${ratingColor}`}>{corner.rating}</td>
+                      </tr>
+                    )
+                  })}
+                </tbody>
+              </table>
+            ) : (
+              <p className="text-[11px] text-gray-500">当前没有足够的数据评估稳定性。</p>
+            )}
+          </ReportBlock>
+        </div>
+      </Section>
+
+      <Section title="附录" icon="📎" tip="需要进一步核对时，再展开看完整证据和补充分析。" defaultOpen={false}>
+        <div className="space-y-3">
+          <ReportBlock title="理论最佳圈" eyebrow="Potential">
+            <div className="mb-3 flex flex-wrap items-baseline gap-4">
+              <div>
+                <div className="text-[10px] text-gray-500">理论最佳</div>
+                <div className="text-2xl font-bold text-purple-400">{formatTime(theoreticalBest.time)}</div>
+              </div>
+              <div>
+                <div className="inline-flex items-center text-[10px] text-gray-500">可节省<InfoTip text="最快圈与理论最佳圈的差值，代表纯技术提升空间" /></div>
+                <div className="text-lg font-bold text-green-400">-{theoreticalBest.savings.toFixed(3)}s</div>
+              </div>
+            </div>
+            <table className="w-full text-xs border-collapse">
+              <thead>
+                <tr className="border-b border-gray-700 text-gray-500">
+                  <th className="py-1 pr-2 text-left">弯道</th>
+                  <th className="py-1 pr-2 text-right">最佳时间</th>
+                  <th className="py-1 pr-2 text-right">来自</th>
+                  <th className="py-1 pr-2 text-right">节省</th>
+                  <th className="py-1 text-left">为什么更快</th>
                 </tr>
-              ))}
-            </tbody>
-          </table>
-        </Section>
-      )}
+              </thead>
+              <tbody>
+                {theoreticalBest.perCorner.map((corner) => (
+                  <tr key={corner.corner} className="border-b border-gray-800/50 text-gray-400">
+                    <td className="py-1.5 pr-2 font-medium text-gray-300">{corner.corner}</td>
+                    <td className="py-1.5 pr-2 text-right">{corner.bestTime.toFixed(3)}s</td>
+                    <td className="py-1.5 pr-2 text-right text-gray-500">第{corner.bestLap}圈</td>
+                    <td className="py-1.5 pr-2 text-right">
+                      {corner.savedVsFastest > 0.001 ? <span className="text-green-400">-{corner.savedVsFastest.toFixed(3)}s</span> : <span className="text-gray-600">—</span>}
+                    </td>
+                    <td className="py-1.5 text-[10px] text-gray-500">
+                      <div>
+                        速度: 入弯{corner.bestEntry >= corner.refEntry ? '+' : ''}{(corner.bestEntry - corner.refEntry).toFixed(1)}
+                        {' '}弯心{corner.bestMin >= corner.refMin ? '+' : ''}{(corner.bestMin - corner.refMin).toFixed(1)}
+                        {' '}出弯{corner.bestExit >= corner.refExit ? '+' : ''}{(corner.bestExit - corner.refExit).toFixed(1)} km/h
+                      </div>
+                      {corner.lineNote && <div className="mt-0.5 text-purple-400/70">{corner.lineNote}</div>}
+                      {corner.bestLine && corner.refLine && corner.bestLap !== fastestVsSlowest.fastestLap && (
+                        <CornerTrajectoryMap
+                          bestLine={corner.bestLine}
+                          refLine={corner.refLine}
+                          bestLapId={corner.bestLap}
+                          refLapId={fastestVsSlowest.fastestLap}
+                          bestSpeeds={{ entry: corner.bestEntry, min: corner.bestMin, exit: corner.bestExit }}
+                          refSpeeds={{ entry: corner.refEntry, min: corner.refMin, exit: corner.refExit }}
+                        />
+                      )}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </ReportBlock>
 
-      {/* 9. Corner Scoring */}
-      {cornerScoring.length > 0 && (
-        <Section title="弯道综合评分" defaultOpen icon="📋" tip="综合考虑平均掉时、稳定性、快慢圈差距和单圈最大掉时的加权评分，越高越需要优化">
-          <div className="space-y-2">
-            {cornerScoring.map((c) => (
-              <div key={c.corner} className="bg-gray-900/50 rounded p-2.5 border border-gray-700/30">
-                <div className="flex items-center justify-between mb-1.5">
-                  <span className="text-xs font-bold text-gray-200">{c.corner}</span>
-                  <div className="w-32">
-                    <ScoreBar score={c.score} />
-                  </div>
-                </div>
-                <div className="grid grid-cols-5 gap-1 text-[10px] text-gray-500">
-                  <div className="text-center">
-                    <div>平均偏差</div>
-                    <div className="text-gray-300">{c.avgDelta.toFixed(3)}s</div>
-                  </div>
-                  <div className="text-center">
-                    <div>标准差</div>
-                    <div className="text-gray-300">{c.stdDev.toFixed(3)}s</div>
-                  </div>
-                  <div className="text-center">
-                    <div>快慢差</div>
-                    <div className="text-gray-300">{c.quickSlowGap.toFixed(3)}s</div>
-                  </div>
-                  <div className="text-center">
-                    <div>最大单丢</div>
-                    <div className="text-gray-300">{c.maxSingleLoss.toFixed(3)}s</div>
-                  </div>
-                  <div className="text-center">
-                    <div>相关性</div>
-                    <div className="text-gray-300">{c.correlation.toFixed(2)}</div>
-                  </div>
-                </div>
+          <ReportBlock title="最快 vs 最慢圈" eyebrow="Spread">
+            <div className="mb-3 flex flex-wrap items-center gap-4 text-xs">
+              <div>
+                <span className="text-gray-500">最快: </span>
+                <span className="font-bold text-green-400">第{fastestVsSlowest.fastestLap}圈 {formatTime(fastestVsSlowest.fastestTime)}</span>
               </div>
-            ))}
-          </div>
-        </Section>
-      )}
+              <div>
+                <span className="text-gray-500">最慢: </span>
+                <span className="font-bold text-red-400">第{fastestVsSlowest.slowestLap}圈 {formatTime(fastestVsSlowest.slowestTime)}</span>
+              </div>
+              <div>
+                <span className="text-gray-500">差距: </span>
+                <span className="font-bold text-yellow-400">{fastestVsSlowest.totalDelta.toFixed(3)}s</span>
+              </div>
+            </div>
+            <div className="space-y-1.5">
+              {fastestVsSlowest.perCorner.map((corner) => {
+                const absPct = Math.abs(corner.percentage)
+                const barColor = absPct > 20 ? 'bg-red-500' : absPct > 10 ? 'bg-yellow-500' : 'bg-gray-500'
+                return (
+                  <div key={corner.corner} className="flex items-center gap-2 text-xs">
+                    <span className="w-7 shrink-0 font-bold text-gray-200">{corner.corner}</span>
+                    <div className="flex flex-1 items-center gap-1">
+                      <span className="w-14 shrink-0 text-right text-green-400">{corner.fastestTime.toFixed(3)}s</span>
+                      <div className="h-2.5 flex-1 overflow-hidden rounded bg-gray-700/50">
+                        <div className={`h-full rounded ${barColor}`} style={{ width: `${Math.min(100, absPct)}%` }} />
+                      </div>
+                      <span className="w-14 shrink-0 text-left text-red-400">{corner.slowestTime.toFixed(3)}s</span>
+                    </div>
+                    <span className="w-10 shrink-0 text-right text-[10px] text-gray-500">{corner.percentage.toFixed(0)}%</span>
+                  </div>
+                )
+              })}
+            </div>
+          </ReportBlock>
 
-      {/* Training Plan moved up — now appears after 理论最佳圈 */}
+          <ReportBlock title="弯道-圈速相关性" eyebrow="Correlation">
+            {cornerCorrelation.length > 0 ? (
+              <table className="w-full text-xs border-collapse">
+                <thead>
+                  <tr className="border-b border-gray-700 text-gray-500">
+                    <th className="py-1 pr-2 text-left">弯道</th>
+                    <th className="py-1 pr-2 text-right">相关系数</th>
+                    <th className="py-1 text-center">显著性</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {[...cornerCorrelation].sort((a, b) => Math.abs(b.correlation) - Math.abs(a.correlation)).map((corner) => (
+                    <tr key={corner.corner} className={`border-b border-gray-800/50 ${Math.abs(corner.correlation) > 0.7 ? 'text-red-300' : 'text-gray-400'}`}>
+                      <td className="py-1 pr-2 font-medium text-gray-300">{corner.corner}</td>
+                      <td className="py-1 pr-2 text-right font-mono">{corner.correlation.toFixed(3)}</td>
+                      <td className="py-1 text-center"><SignificanceBadge significance={corner.significance} /></td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            ) : (
+              <p className="text-[11px] text-gray-500">当前没有足够的数据计算相关性。</p>
+            )}
+          </ReportBlock>
 
+          <ReportBlock title="弯道综合评分" eyebrow="Scoring">
+            {cornerScoring.length > 0 ? (
+              <div className="space-y-2">
+                {cornerScoring.map((corner) => (
+                  <div key={corner.corner} className="rounded border border-gray-700/30 bg-black/10 p-2.5">
+                    <div className="mb-1.5 flex items-center justify-between">
+                      <span className="text-xs font-bold text-gray-200">{corner.corner}</span>
+                      <div className="w-32">
+                        <ScoreBar score={corner.score} />
+                      </div>
+                    </div>
+                    <div className="grid grid-cols-5 gap-1 text-[10px] text-gray-500">
+                      <div className="text-center">
+                        <div>平均偏差</div>
+                        <div className="text-gray-300">{corner.avgDelta.toFixed(3)}s</div>
+                      </div>
+                      <div className="text-center">
+                        <div>标准差</div>
+                        <div className="text-gray-300">{corner.stdDev.toFixed(3)}s</div>
+                      </div>
+                      <div className="text-center">
+                        <div>快慢差</div>
+                        <div className="text-gray-300">{corner.quickSlowGap.toFixed(3)}s</div>
+                      </div>
+                      <div className="text-center">
+                        <div>最大单丢</div>
+                        <div className="text-gray-300">{corner.maxSingleLoss.toFixed(3)}s</div>
+                      </div>
+                      <div className="text-center">
+                        <div>相关性</div>
+                        <div className="text-gray-300">{corner.correlation.toFixed(2)}</div>
+                      </div>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            ) : (
+              <p className="text-[11px] text-gray-500">当前没有弯道综合评分。</p>
+            )}
+          </ReportBlock>
+        </div>
+      </Section>
     </div>
   )
 }
